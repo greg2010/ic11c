@@ -1,0 +1,76 @@
+{
+  "manifest": "1000",
+  "version": "0.0.1.2",
+  "instructions": [
+    {
+      "mnemonic": "move",
+      "opcode": 0,
+      "deprecated": false,
+      "example": "move r? a(r?|num)",
+      "operands": [
+        {
+          "kinds": [
+            "register"
+          ]
+        },
+        {
+          "name": "a",
+          "kinds": [
+            "register",
+            "number"
+          ]
+        }
+      ]
+    },
+    {
+      "mnemonic": "yield",
+      "opcode": 1,
+      "deprecated": false,
+      "example": "yield",
+      "operands": null
+    }
+  ],
+  "logic_types": [
+    {
+      "name": "None",
+      "value": 0,
+      "deprecated": true
+    },
+    {
+      "name": "Power",
+      "value": 1,
+      "deprecated": false
+    }
+  ],
+  "logic_slot_types": [
+    {
+      "name": "None",
+      "value": 0,
+      "deprecated": false
+    }
+  ],
+  "logic_batch_methods": [
+    {
+      "name": "Average",
+      "value": 0,
+      "deprecated": false
+    }
+  ],
+  "logic_reagent_modes": [
+    {
+      "name": "Contents",
+      "value": 0,
+      "deprecated": false
+    }
+  ],
+  "constants": [
+    {
+      "name": "pi",
+      "value": "3.141592653589793"
+    },
+    {
+      "name": "rgas",
+      "value": "8.31446261815324"
+    }
+  ]
+}

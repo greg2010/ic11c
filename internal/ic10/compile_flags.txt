@@ -1,0 +1,5 @@
+-std=c23
+-ffreestanding
+-Wno-implicit-enum-enum-cast
+-include
+ic10_prelude.h

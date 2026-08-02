@@ -1,0 +1,21 @@
+clr db
+move sp 400
+l r0 d0 Temperature
+ls r1 d1 2 OccupantHash
+lb r2 -1252983604 Temperature Average
+lbn r3 -1252983604 12345 Setting Sum
+lr r4 d0 TotalContents 5
+move r5 pi
+move r6 -0
+move r7 r0
+beq r0 r1 16
+j 12
+add r0 r0 1
+poke 0 r0
+get r8 db 0
+bne r0 10 12
+jal 19
+yield
+j 0
+sub r0 r0 1
+j ra

@@ -1,47 +1,31 @@
+# Build output
+bin/
 
-# Created by https://www.toptal.com/developers/gitignore/api/go,visualstudiocode
-# Edit at https://www.toptal.com/developers/gitignore?templates=go,visualstudiocode
+# Release artifacts, from either `task release:` target
+dist/
 
-### Go ###
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+# Root-anchored binaries left by `go build ./cmd/<name>/` without -o.
+/ic11c
+/ic11c.exe
+/isagen
 
-# Test binary, built with `go test -c`
+# Test binaries from `go test -c`
 *.test
 
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
+# Coverage profiles. coverage.out is what `task test` and CI write;
+# .coverage-ephemeral.out is the sanitized profile `task cov` browses.
+coverage.out
+.coverage-ephemeral.out
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# Decompiled game source written by `task isa:csharp:source`. The digest beside
+# it is checked in; this is the game's own code and is not.
+/tools/gamesrc/source*/
 
-### Go Patch ###
-/Godeps/
+# Editors and agents
+.vscode/
+.idea/
+.claude
+.zed
 
-### VisualStudioCode ###
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-*.code-workspace
-
-# Local History for Visual Studio Code
-.history/
-
-### VisualStudioCode Patch ###
-# Ignore all local history of files
-.history
-.ionide
-
-# Support for Project snippet scope
-!.vscode/*.code-snippets
-
-# End of https://www.toptal.com/developers/gitignore/api/go,visualstudiocode
-
-#**/*.yaml
-dist/
+# OS
+.DS_Store
