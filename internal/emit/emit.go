@@ -2,14 +2,16 @@
 // size.
 //
 // Three limits apply: 4096 bytes, 128 lines, and 90 characters on a line. The
-// line count is what binds in practice, since an emitted instruction is far
-// shorter than the 32 bytes a line would have to average for the byte cap to
-// be reached first. The report states what the program spends against all
-// three and names the size budget that binds from the numbers rather than
-// assuming; the line width is
-// reported and not ranked, because it bounds one line's formatting rather than
-// how much program fits. It also accounts for the 512 slot memory array, which
-// no emitted line reveals and which nothing traps a program for overrunning.
+// two budgets balance at 32 bytes a line, counting the separator the editor
+// charges after each, and most programs sit well under that and run out of
+// lines first. The report states what the program spends against all three and
+// names the size budget that binds from the numbers rather than assuming; the
+// line width is reported and not ranked, because it bounds one line's
+// formatting rather than how much program fits. It also accounts for the 512
+// slot memory array, which
+// no emitted line reveals. An address past the end of that array faults; what
+// goes untrapped is a call frame growing down through it into the data region,
+// overwriting a global with nothing to say so.
 //
 // Attribution is by construct, not by function. Calls are inlined by default,
 // so a function called from three places pays for itself three times and a
@@ -46,10 +48,11 @@ type Options struct {
 	//
 	// A name and its integer resolve identically on the chip and occupy one
 	// operand either way, so the choice is bytes against legibility with no
-	// line in it. Names are the default because lines are what bind, and the
-	// bytes they cost are small against a budget no fixture spends half of;
-	// docs/compiler.md carries what that measured. This is the escape hatch
-	// for a program that does run out of bytes.
+	// line in it. Names are the default because lines are what bind: every
+	// corpus fixture spends a larger share of the line limit than of the byte
+	// budget, which is the relation cmd/ic11c's corpus test holds the documents
+	// to. docs/compiler.md carries the measured figures. This is the escape
+	// hatch for a program that does run out of bytes.
 	Numeric bool
 	// Slots is the memory layout the earlier stages decided. It is carried
 	// through to the report rather than derived here: no emitted line names the
@@ -111,6 +114,11 @@ type line struct {
 	// byte accounting attributes to.
 	fn     string
 	inline []source.InlineSite
+	// fnOrdinal is the function's position in the program, which is what groups
+	// lines into a construct. The name cannot: mir.Program.Validate accepts two
+	// functions of one name, and grouping by name would give them a single site
+	// row whose bytes match neither function's own.
+	fnOrdinal int
 }
 
 // resolveLabels maps every block label to the line a branch to it should
@@ -140,24 +148,27 @@ func resolveLabels(prog *mir.Program) map[string]int {
 func layout(prog *mir.Program, render renderer) ([]line, []FuncReport, error) {
 	var lines []line
 	funcs := make([]FuncReport, 0, len(prog.Funcs))
-	for _, fn := range prog.Funcs {
+	for ordinal, fn := range prog.Funcs {
 		start := len(lines)
 		for _, block := range fn.Blocks {
 			if render.readable {
-				lines = append(lines, line{text: render.names[block.Label] + ":", pos: block.Pos, fn: fn.Name})
+				name, err := render.name(block.Label)
+				if err != nil {
+					return nil, nil, fmt.Errorf("emit: %s at %s: %w", fn.Name, block.Pos, err)
+				}
+				lines = append(lines, line{text: name + ":", pos: block.Pos, fn: fn.Name, fnOrdinal: ordinal})
 			}
 			for _, instr := range block.Instrs {
 				text, err := render.instr(instr)
 				if err != nil {
 					return nil, nil, fmt.Errorf("emit: %s at %s: %w", fn.Name, instr.Pos, err)
 				}
-				lines = append(lines, line{text: text, pos: instr.Pos, fn: fn.Name, inline: instr.Inline})
+				lines = append(lines, line{text: text, pos: instr.Pos, fn: fn.Name, inline: instr.Inline, fnOrdinal: ordinal})
 			}
 		}
 		funcs = append(funcs, FuncReport{
 			Name:      fn.Name,
 			Pos:       fn.Pos,
-			Bytes:     measure(lines[start:]),
 			Lines:     len(lines) - start,
 			FirstLine: start,
 		})

@@ -132,6 +132,23 @@ func buildSampleProgram(t *testing.T) *mir.Program {
 	return &mir.Program{Funcs: []*mir.Func{main, helper}}
 }
 
+// buildEmptyFunctionProgram puts a function whose only block holds no
+// instructions between two functions that emit. It is the shape the report
+// documents but no fixture reaches: a row covering an empty range of lines,
+// sitting on the first line of whatever emitted next.
+func buildEmptyFunctionProgram(t *testing.T) *mir.Program {
+	t.Helper()
+	main := mir.NewFunc("main", position(1))
+	main.NewBlock("main.entry", position(1)).Append(
+		instr(t, ic10.OpMove, mir.PhysReg{Reg: 0}, mir.Imm{Value: 1}),
+	)
+	empty := mir.NewFunc("empty", position(2))
+	empty.NewBlock("empty.entry", position(2))
+	tail := mir.NewFunc("tail", position(3))
+	tail.NewBlock("tail.entry", position(3)).Append(instr(t, ic10.OpYield))
+	return &mir.Program{Funcs: []*mir.Func{main, empty, tail}}
+}
+
 func negativeZero() float64 {
 	zero := 0.0
 	return -zero
@@ -163,27 +180,38 @@ func TestEmitGolden(t *testing.T) {
 // around: a blank line costs a line against the 128 line limit and an
 // instruction against the tick budget while computing nothing.
 func TestEmitProducesNoBlankLines(t *testing.T) {
-	for _, readable := range []bool{false, true} {
-		t.Run("readable="+strconv.FormatBool(readable), func(t *testing.T) {
-			out := emit(t, buildSampleProgram(t), Options{Readable: readable})
-			if strings.HasSuffix(out.Text, "\n") {
-				t.Error("output ends with a newline, which is a trailing blank line")
-			}
-			if strings.Contains(out.Text, "\n\n") {
-				t.Error("output contains a blank line")
-			}
-			for i, line := range strings.Split(out.Text, "\n") {
-				if strings.TrimSpace(line) == "" {
-					t.Errorf("line %d is blank", i)
+	programs := []struct {
+		name  string
+		build func(t *testing.T) *mir.Program
+	}{
+		{name: "sample", build: buildSampleProgram},
+		// A function and a block that emit nothing are where a stray separator
+		// line would come from, since neither leaves a line of its own behind.
+		{name: "a function that emits nothing", build: buildEmptyFunctionProgram},
+	}
+	for _, prog := range programs {
+		for _, readable := range []bool{false, true} {
+			t.Run(prog.name+"/readable="+strconv.FormatBool(readable), func(t *testing.T) {
+				out := emit(t, prog.build(t), Options{Readable: readable})
+				if strings.HasSuffix(out.Text, "\n") {
+					t.Error("output ends with a newline, which is a trailing blank line")
 				}
-				if strings.Contains(line, "#") {
-					t.Errorf("line %d is a comment: %q", i, line)
+				if strings.Contains(out.Text, "\n\n") {
+					t.Error("output contains a blank line")
 				}
-				if strings.HasPrefix(line, "alias ") || strings.HasPrefix(line, "define ") {
-					t.Errorf("line %d is an assembler directive: %q", i, line)
+				for i, line := range strings.Split(out.Text, "\n") {
+					if strings.TrimSpace(line) == "" {
+						t.Errorf("line %d is blank", i)
+					}
+					if strings.Contains(line, "#") {
+						t.Errorf("line %d is a comment: %q", i, line)
+					}
+					if strings.HasPrefix(line, "alias ") || strings.HasPrefix(line, "define ") {
+						t.Errorf("line %d is an assembler directive: %q", i, line)
+					}
 				}
-			}
-		})
+			})
+		}
 	}
 }
 
@@ -295,15 +323,38 @@ func TestEmitErrors(t *testing.T) {
 	}
 }
 
+// TestLayoutRefusesALabelDefinitionWithNoEmittedName covers the second reader of
+// the readable form's name table.
+//
+// A branch target the table has no name for is ErrUnresolvedLabel, and the
+// definition line the target reaches was spelled without asking: a missing name
+// emitted a bare ":", which is a line the chip's parser reads as an instruction
+// it has no name for. Emit builds both tables from one block list, so the shape
+// is reached through layout rather than through Emit.
+func TestLayoutRefusesALabelDefinitionWithNoEmittedName(t *testing.T) {
+	fn := mir.NewFunc("main", position(1))
+	fn.NewBlock("main.entry", position(1)).Append(instr(t, ic10.OpYield))
+	prog := &mir.Program{Funcs: []*mir.Func{fn}}
+
+	lines, funcs, err := layout(prog, renderer{readable: true, lineOf: resolveLabels(prog)})
+	if !errors.Is(err, ErrUnresolvedLabel) {
+		t.Fatalf("layout = %v, %v, %v, want %v", lines, funcs, err, ErrUnresolvedLabel)
+	}
+	if !strings.Contains(err.Error(), "main.entry") {
+		t.Errorf("layout error = %q, want it to mention %q", err, "main.entry")
+	}
+}
+
 func TestEmitNilProgram(t *testing.T) {
 	if _, err := Emit(nil, Options{}); err == nil {
 		t.Fatal("Emit(nil) returned no error")
 	}
 }
 
-// TestByteAccounting checks the report against a count done by hand. Every line
-// is charged its own length plus the newline that ends it, so the emitted text
-// is one byte shorter than the reported total.
+// TestByteAccounting checks the report against a count done by hand. A line is
+// charged its own length and a two byte separator while text follows it, so the
+// emitted text, which joins lines with one byte and ends without a separator,
+// is shorter than the reported total by one byte per join.
 func TestByteAccounting(t *testing.T) {
 	main := mir.NewFunc("main", position(1))
 	main.NewBlock("main.entry", position(1)).Append(
@@ -315,10 +366,11 @@ func TestByteAccounting(t *testing.T) {
 
 	out := emit(t, &mir.Program{Funcs: []*mir.Func{main, helper}}, Options{})
 
-	// "move r0 1" is 9, "j 2" is 3, "yield" is 5, each plus one newline.
+	// "move r0 1" is 9, "j 2" is 3, "yield" is 5. The first two are followed by
+	// text and pay a separator; the last is the end of the program and does not.
 	const (
-		wantMainBytes   = (9 + 1) + (3 + 1)
-		wantHelperBytes = 5 + 1
+		wantMainBytes   = (9 + 2) + (3 + 2)
+		wantHelperBytes = 5
 		wantBytes       = wantMainBytes + wantHelperBytes
 	)
 	if out.Text != "move r0 1\nj 2\nyield" {
@@ -327,14 +379,15 @@ func TestByteAccounting(t *testing.T) {
 	if out.Report.Bytes != wantBytes {
 		t.Errorf("Bytes = %d, want %d", out.Report.Bytes, wantBytes)
 	}
-	if got := len(out.Text); got != wantBytes-1 {
-		t.Errorf("len(Text) = %d, want %d", got, wantBytes-1)
+	// Two joins, each one byte in Text and two in the count.
+	if got := len(out.Text); got != wantBytes-2 {
+		t.Errorf("len(Text) = %d, want %d", got, wantBytes-2)
 	}
 	if out.Report.Lines != 3 {
 		t.Errorf("Lines = %d, want 3", out.Report.Lines)
 	}
 	if out.Report.Bytes > MaxBytes {
-		t.Errorf("Bytes = %d, over the %d byte budget for a 20 byte program", out.Report.Bytes, MaxBytes)
+		t.Errorf("Bytes = %d, over the %d byte budget for a %d byte program", out.Report.Bytes, MaxBytes, wantBytes)
 	}
 	if len(out.Report.Violations) != 0 {
 		t.Errorf("Violations = %v, want none", out.Report.Violations)
@@ -354,25 +407,228 @@ func TestByteAccounting(t *testing.T) {
 	}
 }
 
+// synthetic builds lines from text alone, for accounting cases no emitted
+// program reaches.
+func synthetic(t *testing.T, texts ...string) []line {
+	t.Helper()
+	lines := make([]line, len(texts))
+	for i, text := range texts {
+		lines[i] = line{text: text, pos: position(i + 1), fn: "main"}
+	}
+	return lines
+}
+
+// TestChargesMatchTheEditor pins the byte count against
+// InputSourceCode.UpdateFileSize. Each case is counted by hand off that method:
+// it scans backward for the last slot whose text is non-empty, sums every
+// slot's text length, and charges two bytes after each slot below that index.
+func TestChargesMatchTheEditor(t *testing.T) {
+	tests := []struct {
+		name  string
+		texts []string
+		want  int
+	}{
+		{
+			name: "no lines at all",
+			want: 0,
+		},
+		{
+			// The backward scan reaches slot 0 and breaks there, so no slot is
+			// below it and the sum loop charges no separator.
+			name:  "one line pays no separator",
+			texts: []string{"yield"},
+			want:  5,
+		},
+		{
+			// The scan breaks at slot 1, so slot 0 alone is charged a separator.
+			name:  "two lines pay one separator",
+			texts: []string{"move r0 1", "yield"},
+			want:  9 + 2 + 5,
+		},
+		{
+			name:  "three lines pay two separators",
+			texts: []string{"move r0 1", "j 2", "yield"},
+			want:  9 + 2 + 3 + 2 + 5,
+		},
+		{
+			// The scan skips the empty slot and breaks at slot 0, so the blank
+			// costs neither a length nor a separator.
+			name:  "a trailing blank line is free",
+			texts: []string{"yield", ""},
+			want:  5,
+		},
+		{
+			name:  "every trailing blank line is free",
+			texts: []string{"yield", "", "", ""},
+			want:  5,
+		},
+		{
+			// The scan breaks at slot 2, which puts the blank below it. Its
+			// length is zero but its separator is charged like any other.
+			name:  "a blank line between two lines still pays its separator",
+			texts: []string{"yield", "", "yield"},
+			want:  5 + 2 + 0 + 2 + 5,
+		},
+		{
+			// Nothing breaks the backward scan, so it falls out at index 0 and
+			// nothing below it exists to charge.
+			name:  "a program of nothing but blanks costs nothing",
+			texts: []string{"", "", ""},
+			want:  0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := synthetic(t, tt.texts...)
+			if got := sum(charges(lines)); got != tt.want {
+				t.Errorf("charges sum to %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// budgetLines builds a 128 slot program whose first count lines carry all
+// textBytes of its text and whose remaining slots are blank, so a case can land
+// the total on either side of the budget without depending on what any
+// instruction happens to render to.
+func budgetLines(t *testing.T, count, textBytes int) []line {
+	t.Helper()
+	if count < 1 || count > MaxLines {
+		t.Fatalf("count = %d, want 1 to %d", count, MaxLines)
+	}
+	texts := make([]string, MaxLines)
+	for i := range count {
+		width := textBytes / count
+		if i < textBytes%count {
+			width++
+		}
+		if width > MaxLineLength {
+			t.Fatalf("line %d is %d characters, over the %d character limit", i, width, MaxLineLength)
+		}
+		texts[i] = strings.Repeat("x", width)
+	}
+	return synthetic(t, texts...)
+}
+
+// exactBudgetText is the text a program of count non-empty lines may hold to
+// land on exactly MaxBytes, once the count-1 separators below its last line of
+// text are charged.
+func exactBudgetText(count int) int { return MaxBytes - separatorBytes*(count-1) }
+
+// TestByteBudgetBoundary pins the accounting against the decision it feeds.
+// UpdateFileSize enables the submit button at _fileSize <= 4096, so a program
+// landing on exactly 4096 is one the game accepts and the report must not call
+// a violation.
+func TestByteBudgetBoundary(t *testing.T) {
+	tests := []struct {
+		name          string
+		count         int
+		textBytes     int
+		wantBytes     int
+		wantViolation bool
+	}{
+		{
+			name:      "exactly the budget fits",
+			count:     MaxLines,
+			textBytes: exactBudgetText(MaxLines),
+			wantBytes: MaxBytes,
+		},
+		{
+			// One byte of text more. Charging one byte a separator would have
+			// counted this program at 3970 and called it a fit, which is the
+			// disagreement with the game this accounting exists to close.
+			name:          "one byte over the budget is a violation",
+			count:         MaxLines,
+			textBytes:     exactBudgetText(MaxLines) + 1,
+			wantBytes:     MaxBytes + 1,
+			wantViolation: true,
+		},
+		{
+			// Half the slots hold text, so the separator count comes from the
+			// last line of text rather than from a full grid's fixed 127. A
+			// boundary case that fills the grid cannot tell the two apart.
+			name:      "a shorter program reaches the budget on fewer separators",
+			count:     MaxLines / 2,
+			textBytes: exactBudgetText(MaxLines / 2),
+			wantBytes: MaxBytes,
+		},
+		{
+			name:          "one byte over on fewer separators is still a violation",
+			count:         MaxLines / 2,
+			textBytes:     exactBudgetText(MaxLines/2) + 1,
+			wantBytes:     MaxBytes + 1,
+			wantViolation: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := buildReport(budgetLines(t, tt.count, tt.textBytes), nil, SlotReport{})
+			if report.Bytes != tt.wantBytes {
+				t.Errorf("Bytes = %d, want %d", report.Bytes, tt.wantBytes)
+			}
+			over := slices.ContainsFunc(report.Violations, func(v Violation) bool {
+				return v.Kind == ViolationBytes
+			})
+			if over != tt.wantViolation {
+				t.Errorf("byte violation = %v, want %v; violations were %v", over, tt.wantViolation, report.Violations)
+			}
+		})
+	}
+}
+
 // TestFunctionBytesSumToProgramBytes is what makes attribution usable: the
 // parts have to add up to the whole or the report cannot say where the size
 // went.
 func TestFunctionBytesSumToProgramBytes(t *testing.T) {
-	for _, readable := range []bool{false, true} {
-		t.Run("readable="+strconv.FormatBool(readable), func(t *testing.T) {
-			out := emit(t, buildSampleProgram(t), Options{Readable: readable})
-			bytes, lines := 0, 0
-			for _, fn := range out.Report.Functions {
-				bytes += fn.Bytes
-				lines += fn.Lines
-			}
-			if bytes != out.Report.Bytes {
-				t.Errorf("function bytes sum to %d, program is %d", bytes, out.Report.Bytes)
-			}
-			if lines != out.Report.Lines {
-				t.Errorf("function lines sum to %d, program is %d", lines, out.Report.Lines)
-			}
-		})
+	programs := []struct {
+		name  string
+		build func(t *testing.T) *mir.Program
+	}{
+		{name: "sample", build: buildSampleProgram},
+		// A function charged an empty range of lines has to contribute zero
+		// rather than whatever the line it starts on costs its real owner.
+		{name: "a function that emits nothing", build: buildEmptyFunctionProgram},
+	}
+	for _, prog := range programs {
+		for _, readable := range []bool{false, true} {
+			t.Run(prog.name+"/readable="+strconv.FormatBool(readable), func(t *testing.T) {
+				out := emit(t, prog.build(t), Options{Readable: readable})
+				bytes, lines := 0, 0
+				for _, fn := range out.Report.Functions {
+					bytes += fn.Bytes
+					lines += fn.Lines
+				}
+				if bytes != out.Report.Bytes {
+					t.Errorf("function bytes sum to %d, program is %d", bytes, out.Report.Bytes)
+				}
+				if lines != out.Report.Lines {
+					t.Errorf("function lines sum to %d, program is %d", lines, out.Report.Lines)
+				}
+			})
+		}
+	}
+}
+
+// TestFunctionThatEmitsNothingIsStillReported covers what the report promises
+// about such a function: it keeps its row, spends nothing, and carries the line
+// it would have started on rather than a line another function owns.
+func TestFunctionThatEmitsNothingIsStillReported(t *testing.T) {
+	out := emit(t, buildEmptyFunctionProgram(t), Options{})
+	if out.Text != "move r0 1\nyield" {
+		t.Fatalf("Text = %q", out.Text)
+	}
+	want := []FuncReport{
+		{Name: "main", Pos: position(1), Bytes: len("move r0 1") + separatorBytes, Lines: 1, FirstLine: 0},
+		{Name: "empty", Pos: position(2), Bytes: 0, Lines: 0, FirstLine: 1},
+		{Name: "tail", Pos: position(3), Bytes: len("yield"), Lines: 1, FirstLine: 1},
+	}
+	if len(out.Report.Functions) != len(want) {
+		t.Fatalf("Functions = %+v, want %+v", out.Report.Functions, want)
+	}
+	for i, got := range out.Report.Functions {
+		if got != want[i] {
+			t.Errorf("Functions[%d] = %+v, want %+v", i, got, want[i])
+		}
 	}
 }
 
@@ -414,22 +670,137 @@ func TestOverBudgetStillEmits(t *testing.T) {
 	}
 }
 
-func TestLineCountViolation(t *testing.T) {
-	fn := mir.NewFunc("long", position(1))
-	block := fn.NewBlock("long.entry", position(1))
-	for range MaxLines + 1 {
-		block.Append(instr(t, ic10.OpYield))
+// TestLineCountBoundary pins the line limit against the grid the editor holds,
+// which is exactly MaxLines slots wide. A program filling it is one Paste
+// receives whole; one line more is a line Paste drops with nothing said, so the
+// limit has to read as exceeded at MaxLines+1 and not at MaxLines.
+func TestLineCountBoundary(t *testing.T) {
+	tests := []struct {
+		name          string
+		lines         int
+		wantViolation bool
+	}{
+		{name: "one line short of the limit", lines: MaxLines - 1},
+		{name: "exactly the limit fits", lines: MaxLines},
+		{name: "one line over the limit", lines: MaxLines + 1, wantViolation: true},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := mir.NewFunc("long", position(1))
+			block := fn.NewBlock("long.entry", position(1))
+			for range tt.lines {
+				block.Append(instr(t, ic10.OpYield))
+			}
 
-	out := emit(t, &mir.Program{Funcs: []*mir.Func{fn}}, Options{})
-	if out.Report.Lines != MaxLines+1 {
-		t.Fatalf("Lines = %d, want %d", out.Report.Lines, MaxLines+1)
+			out := emit(t, &mir.Program{Funcs: []*mir.Func{fn}}, Options{})
+			if out.Report.Lines != tt.lines {
+				t.Fatalf("Lines = %d, want %d", out.Report.Lines, tt.lines)
+			}
+			// A yield is short enough that no case here spends the byte budget,
+			// so the line count is the only limit the row can be reporting.
+			if out.Report.Bytes > MaxBytes {
+				t.Fatalf("Bytes = %d, want it under the %d byte budget", out.Report.Bytes, MaxBytes)
+			}
+			over := slices.ContainsFunc(out.Report.Violations, func(v Violation) bool {
+				return v.Kind == ViolationLines
+			})
+			if over != tt.wantViolation {
+				t.Errorf("line count violation = %v, want %v; violations were %v", over, tt.wantViolation, out.Report.Violations)
+			}
+			if !tt.wantViolation && len(out.Report.Violations) != 0 {
+				t.Errorf("Violations = %v, want none", out.Report.Violations)
+			}
+		})
 	}
-	if out.Report.Bytes > MaxBytes {
-		t.Errorf("Bytes = %d, want it under the %d byte budget", out.Report.Bytes, MaxBytes)
+}
+
+// widths builds synthetic lines of the given character counts, for violation
+// combinations a real program would need thousands of instructions to reach.
+func widths(t *testing.T, counts ...int) []line {
+	t.Helper()
+	texts := make([]string, len(counts))
+	for i, count := range counts {
+		texts[i] = strings.Repeat("x", count)
 	}
-	if len(out.Report.Violations) != 1 || out.Report.Violations[0].Kind != ViolationLines {
-		t.Fatalf("Violations = %v, want exactly the line limit", out.Report.Violations)
+	return synthetic(t, texts...)
+}
+
+// overWideAmong returns the widths of a count line program whose lines at the
+// given indices exceed the line limit and whose others do not.
+func overWideAmong(count int, at ...int) []int {
+	counts := slices.Repeat([]int{MaxLineLength - 10}, count)
+	for i, index := range at {
+		counts[index] = MaxLineLength + 1 + i
+	}
+	return counts
+}
+
+// TestViolationOrder covers the order Report.Violations documents: the
+// whole-program violations first, then the per-line ones ascending. Every other
+// violation case exceeds one limit alone, and one limit alone cannot tell an
+// order apart from whichever check happens to run first.
+func TestViolationOrder(t *testing.T) {
+	type reported struct {
+		Kind ViolationKind
+		Line int
+	}
+	tests := []struct {
+		name   string
+		widths []int
+		want   []reported
+	}{
+		{
+			name:   "a program inside every limit",
+			widths: []int{5, 5, 5},
+		},
+		{
+			name:   "the byte budget before the line count",
+			widths: slices.Repeat([]int{MaxLineLength - 10}, MaxLines+1),
+			want: []reported{
+				{Kind: ViolationBytes, Line: -1},
+				{Kind: ViolationLines, Line: -1},
+			},
+		},
+		{
+			// Under the line count, so the line width has to sort after a
+			// whole-program violation rather than merely after the other line.
+			name:   "a wide line after a whole-program violation",
+			widths: overWideAmong(60, 59),
+			want: []reported{
+				{Kind: ViolationBytes, Line: -1},
+				{Kind: ViolationLineLength, Line: 59},
+			},
+		},
+		{
+			name:   "two wide lines ascending",
+			widths: []int{5, MaxLineLength + 1, 5, MaxLineLength + 5, 5},
+			want: []reported{
+				{Kind: ViolationLineLength, Line: 1},
+				{Kind: ViolationLineLength, Line: 3},
+			},
+		},
+		{
+			name:   "all three limits at once",
+			widths: overWideAmong(MaxLines+1, 0, MaxLines),
+			want: []reported{
+				{Kind: ViolationBytes, Line: -1},
+				{Kind: ViolationLines, Line: -1},
+				{Kind: ViolationLineLength, Line: 0},
+				{Kind: ViolationLineLength, Line: MaxLines},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := buildReport(widths(t, tt.widths...), nil, SlotReport{})
+			got := make([]reported, len(report.Violations))
+			for i, violation := range report.Violations {
+				got[i] = reported{Kind: violation.Kind, Line: violation.Line}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("Violations = %+v, want %+v; messages were %v", got, tt.want, report.Violations)
+			}
+		})
 	}
 }
 
@@ -489,8 +860,7 @@ func site(callee string, line int) source.InlineSite {
 
 // TestAttributionByInlineSite is the accounting the report exists for. One
 // callee spliced in at two call sites has to appear as two constructs: a single
-// total for it would say the code costs 26 bytes when deleting either call
-// recovers only 13.
+// total for it would name a cost that deleting either call does not recover.
 func TestAttributionByInlineSite(t *testing.T) {
 	first := site("popcount", 30)
 	second := site("popcount", 40)
@@ -510,11 +880,13 @@ func TestAttributionByInlineSite(t *testing.T) {
 
 	out := emit(t, &mir.Program{Funcs: []*mir.Func{fn}}, Options{})
 
+	// Every line but the sub pays a separator, since text follows it. The sub is
+	// the last line of the program and pays only its own length.
 	const (
-		move  = len("move r0 1") + 1
-		yield = len("yield") + 1
-		add   = len("add r0 r0 1") + 1
-		sub   = len("sub r0 r0 1") + 1
+		move  = len("move r0 1") + separatorBytes
+		yield = len("yield") + separatorBytes
+		add   = len("add r0 r0 1") + separatorBytes
+		sub   = len("sub r0 r0 1")
 	)
 	want := []SiteReport{
 		{Func: "main", Bytes: move + yield + add + yield + sub, Lines: 5, Own: move + yield},
@@ -559,6 +931,40 @@ func TestSiteOwnBytesSumToProgramBytes(t *testing.T) {
 	}
 }
 
+// TestSitesSeparateSameNamedFunctions covers a program mir.Program.Validate
+// accepts and a site table keyed by function name alone would merge. Two
+// functions of one name are two constructs, and merging them produces a row
+// whose bytes belong to neither of the two FuncReports the same program
+// produces.
+func TestSitesSeparateSameNamedFunctions(t *testing.T) {
+	first := mir.NewFunc("dup", position(1))
+	first.NewBlock("first.entry", position(1)).Append(instr(t, ic10.OpYield))
+	second := mir.NewFunc("dup", position(2))
+	second.NewBlock("second.entry", position(2)).Append(
+		instr(t, ic10.OpMove, mir.PhysReg{Reg: 0}, mir.Imm{Value: 1}),
+	)
+
+	out := emit(t, &mir.Program{Funcs: []*mir.Func{first, second}}, Options{})
+
+	const (
+		yield = len("yield") + separatorBytes
+		move  = len("move r0 1")
+	)
+	// Largest first, so the second function leads despite emitting later.
+	want := []SiteReport{
+		{Func: "dup", Bytes: move, Lines: 1, Own: move},
+		{Func: "dup", Bytes: yield, Lines: 1, Own: yield},
+	}
+	if len(out.Report.Sites) != len(want) {
+		t.Fatalf("Sites = %+v, want %+v", out.Report.Sites, want)
+	}
+	for i, got := range out.Report.Sites {
+		if got.Func != want[i].Func || got.Bytes != want[i].Bytes || got.Lines != want[i].Lines || got.Own != want[i].Own {
+			t.Errorf("Sites[%d] = %+v, want %+v", i, got, want[i])
+		}
+	}
+}
+
 // TestReportSpendsCoverEveryLimit checks the report accounts for all three
 // limits the machine enforces, not only the byte budget.
 func TestReportSpendsCoverEveryLimit(t *testing.T) {
@@ -570,7 +976,7 @@ func TestReportSpendsCoverEveryLimit(t *testing.T) {
 
 	out := emit(t, &mir.Program{Funcs: []*mir.Func{fn}}, Options{})
 	want := []Spend{
-		{Kind: ViolationBytes, Used: len("move r0 1") + 1 + len("yield") + 1, Max: MaxBytes},
+		{Kind: ViolationBytes, Used: len("move r0 1") + separatorBytes + len("yield"), Max: MaxBytes},
 		{Kind: ViolationLines, Used: 2, Max: MaxLines},
 		{Kind: ViolationLineLength, Used: len("move r0 1"), Max: MaxLineLength},
 	}
@@ -663,16 +1069,16 @@ func TestReportAccountsForTheDataRegion(t *testing.T) {
 			// The data region is not one of the three limits the editor
 			// enforces, so it never becomes a violation of them.
 			if len(out.Report.Violations) != 0 {
-				t.Errorf("Violations = %v, want none for a two byte program", out.Report.Violations)
+				t.Errorf("Violations = %v, want none for a one line program", out.Report.Violations)
 			}
 		})
 	}
 }
 
-// TestBindingLimitIsComputed covers the reason the answer is not asserted.
-// Lines bind for every real program, since an emitted instruction averages 10
-// to 13 characters against the 32 the byte cap would need, but a program of
-// long lines reaches 4096 bytes while still well under 128 lines.
+// TestBindingLimitIsComputed covers the reason the answer is not asserted. The
+// two budgets balance at 32 bytes a line, counting the separator charged after
+// each, so a program of short lines runs out of lines first and a program of
+// long ones runs out of bytes while still well under 128 lines.
 func TestBindingLimitIsComputed(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -801,6 +1207,61 @@ func TestOverBudgetReportNamesWhatToCut(t *testing.T) {
 	}
 }
 
+// TestAttributionColumnsAlignPastTheLineLimit covers the width of the
+// attribution table's line count column. The width is set from the line limit,
+// and this report is printed precisely when a program exceeds one, so a program
+// over the line limit carries counts that column was never sized for. A cell
+// too wide for it pushes the rest of its row along and the table stops reading
+// as a table.
+func TestAttributionColumnsAlignPastTheLineLimit(t *testing.T) {
+	body := site("expand", 20)
+	tail := site("trim", 25)
+
+	fn := mir.NewFunc("main", position(1))
+	block := fn.NewBlock("main.entry", position(1))
+	for range MaxLines * 8 {
+		block.Append(inlined(instr(t, ic10.OpYield), body))
+	}
+	block.Append(inlined(instr(t, ic10.OpYield), tail))
+
+	out := emit(t, &mir.Program{Funcs: []*mir.Func{fn}}, Options{})
+	if out.Report.Lines <= MaxLines {
+		t.Fatalf("Lines = %d, want it over the %d line limit", out.Report.Lines, MaxLines)
+	}
+	rows := attributionRows(t, out.Report.String())
+	if len(rows) != 3 {
+		t.Fatalf("got %d attribution rows, want the function and its two call sites:\n%s", len(rows), out.Report)
+	}
+	// The share column is fixed width and follows the line count, so its offset
+	// is the same on every row exactly when the counts share a column.
+	want := strings.Index(rows[0], "%")
+	for _, row := range rows[1:] {
+		if got := strings.Index(row, "%"); got != want {
+			t.Errorf("the share column starts at %d on %q and at %d on %q", got, row, want, rows[0])
+		}
+	}
+}
+
+// attributionRows returns the rows of the report's per-construct table, which
+// are the indented lines under its header.
+func attributionRows(t *testing.T, report string) []string {
+	t.Helper()
+	const header = "  bytes by construct,"
+	var rows []string
+	inTable := false
+	for line := range strings.SplitSeq(report, "\n") {
+		switch {
+		case strings.HasPrefix(line, header):
+			inTable = true
+		case inTable && strings.HasPrefix(line, "    "):
+			rows = append(rows, line)
+		case inTable:
+			return rows
+		}
+	}
+	return rows
+}
+
 func TestViolationKindString(t *testing.T) {
 	tests := []struct {
 		kind ViolationKind
@@ -849,6 +1310,12 @@ func TestSpendPercent(t *testing.T) {
 		{name: "over", spend: Spend{Used: 256, Max: 128}, want: 200},
 		{name: "rounds down", spend: Spend{Used: 1, Max: 128}, want: 0},
 		{name: "no limit", spend: Spend{Used: 5}, want: 0},
+		{name: "exactly the limit", spend: Spend{Used: MaxBytes, Max: MaxBytes}, want: 100},
+		// The two readings either side of the limit are the ones that have to
+		// differ from it: a share rounded down both ways calls a program one byte
+		// over budget and one byte short of it 100% alike.
+		{name: "one short of the limit", spend: Spend{Used: MaxBytes - 1, Max: MaxBytes}, want: 99},
+		{name: "one over the limit", spend: Spend{Used: MaxBytes + 1, Max: MaxBytes}, want: 101},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -1,6 +1,7 @@
 package emit
 
 import (
+	"context"
 	"errors"
 	"math"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/greg2010/ic11c/internal/ic10"
 	"github.com/greg2010/ic11c/internal/mir"
+	"github.com/greg2010/ic11c/internal/vm"
 )
 
 func lookupLogicType(t *testing.T, name string) ic10.LogicType {
@@ -166,15 +168,16 @@ func TestRenderOperandErrors(t *testing.T) {
 	}
 }
 
-// TestFormatImm pins the literal spellings. Exponent notation is never
-// produced; a named constant wins only when it is shorter than the decimal
-// expansion, which is the whole reason to prefer it.
+// TestFormatImm pins the literal spellings and loads each one back through the
+// interpreter. Exponent notation is never produced; a named constant wins only
+// when it is shorter than the decimal expansion, which is the whole reason to
+// prefer it.
 func TestFormatImm(t *testing.T) {
 	tests := []struct {
 		name    string
 		value   float64
 		want    string
-		wantErr bool
+		wantErr error
 	}{
 		{name: "zero", value: 0, want: "0"},
 		{name: "negative zero", value: math.Copysign(0, -1), want: "-0"},
@@ -184,7 +187,7 @@ func TestFormatImm(t *testing.T) {
 		{name: "prefab hash", value: -1252983604, want: "-1252983604"},
 		{name: "large integer stays decimal", value: 1e21, want: "1000000000000000000000"},
 		{name: "small fraction stays decimal", value: 0.001, want: "0.001"},
-		{name: "not a number is unspellable", value: math.NaN(), wantErr: true},
+		{name: "not a number is unspellable", value: math.NaN(), wantErr: ErrUnmaterialisedNaN},
 		{name: "positive infinity", value: math.Inf(1), want: "pinf"},
 		{name: "negative infinity", value: math.Inf(-1), want: "ninf"},
 		{name: "pi", value: math.Pi, want: "pi"},
@@ -197,9 +200,9 @@ func TestFormatImm(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := formatImm(tt.value)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("formatImm(%v) = %q, want an error", tt.value, got)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("formatImm(%v) = %q, %v, want %v", tt.value, got, err, tt.wantErr)
 				}
 				return
 			}
@@ -209,23 +212,44 @@ func TestFormatImm(t *testing.T) {
 			if got != tt.want {
 				t.Fatalf("formatImm(%v) = %q, want %q", tt.value, got, tt.want)
 			}
-			if tt.want == "pinf" || tt.want == "ninf" {
-				return
-			}
-			if info, ok := ic10.LookupConstant(got); ok {
-				if info.Value != tt.value {
-					t.Errorf("formatImm(%v) = %q, which resolves to %v", tt.value, got, info.Value)
-				}
-				return
-			}
-			round, err := strconv.ParseFloat(got, 64)
-			if err != nil {
-				t.Fatalf("formatImm(%v) = %q, which does not parse: %v", tt.value, got, err)
-			}
-			if round != tt.value {
-				t.Errorf("formatImm(%v) = %q, which parses back as %v", tt.value, got, round)
-			}
+			assertLoadsAs(t, got, tt.value)
 		})
+	}
+}
+
+// assertLoadsAs fails unless the chip's own operand parser reads text back as
+// the value it was formatted from, bit for bit.
+//
+// The oracle is the interpreter rather than strconv.ParseFloat because the chip
+// reads a narrower number syntax than Go does: the game parses an operand with
+// NumberStyles.Number, which admits no exponent, no hexadecimal and no spelling
+// of an infinity or a NaN. Rounding a literal through Go's parser would accept
+// spellings the chip's assembler refuses, which is the one property
+// [formatImm]'s contract rests on. Loading it as an instruction operand also
+// runs the constant table and the machine's own resolution order, so a named
+// constant and a decimal expansion are checked by the same means.
+//
+// Bits rather than values: -0 and 0 compare equal as doubles, and which of the
+// two the formatter was asked for is the whole question for that row.
+func assertLoadsAs(t *testing.T, text string, want float64) {
+	t.Helper()
+	ctx := context.Background()
+	src := "move r0 " + text
+	m := vm.NewMachine()
+	if err := m.Load(ctx, src); err != nil {
+		t.Fatalf("Load(%q): %v", src, err)
+	}
+	executed, err := m.Tick(ctx, 1)
+	if err != nil {
+		t.Fatalf("running %q: %v", src, err)
+	}
+	if executed != 1 {
+		t.Fatalf("running %q executed %d instructions, want 1", src, executed)
+	}
+	got := m.Register(0)
+	if math.Float64bits(got) != math.Float64bits(want) {
+		t.Errorf("%q loads as %v (%#016x), want %v (%#016x)",
+			text, got, math.Float64bits(got), want, math.Float64bits(want))
 	}
 }
 
@@ -254,6 +278,36 @@ func TestRenderInstr(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("instr = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRenderRefusesALabelWithNoEmittedName covers the readable form's second
+// label table.
+//
+// A label resolves through two maps and either can be missing. The line table is
+// checked and the name table was not, so a label the mangler never saw rendered
+// as an empty operand: a line one token short, which the chip's parser reads as
+// a different instruction rather than as a failure.
+func TestRenderRefusesALabelWithNoEmittedName(t *testing.T) {
+	render := renderer{readable: true, lineOf: map[string]int{"known": 1, "unmangled": 2}}
+	tests := []struct {
+		name  string
+		label string
+		want  string
+	}{
+		{name: "a label neither table holds", label: "nowhere"},
+		{name: "a label only the line table holds", label: "unmangled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := render.operand(mir.Label{Name: tt.label})
+			if !errors.Is(err, ErrUnresolvedLabel) {
+				t.Fatalf("operand(%s) = %q, %v, want %v", tt.label, got, err, ErrUnresolvedLabel)
+			}
+			if got != tt.want {
+				t.Errorf("operand(%s) rendered %q alongside its error, want %q", tt.label, got, tt.want)
 			}
 		})
 	}

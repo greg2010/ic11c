@@ -1,8 +1,8 @@
-program: 383 of 4096 bytes (9%), 25 of 128 lines (19%), longest line 37 of 90 characters (41%)
+program: 406 of 4096 bytes (9%), 25 of 128 lines (19%), longest line 37 of 90 characters (41%)
   closest limit: the line count, at 19% spent
   data region: 2 of 512 slots, 1 of them spilled; 510 slots for call frames, which nothing stops from growing past
   bytes by construct, largest first; an indented call's bytes are counted in the line above it:
-      352 bytes   22 lines   91%  main
-       31 bytes    3 lines    8%  helper
-  main: 352 bytes over 22 lines from emitted line 0, declared at t.mc:1:1
-  helper: 31 bytes over 3 lines from emitted line 22, declared at t.mc:20:1
+      374 bytes   22 lines   92%  main
+       32 bytes    3 lines    7%  helper
+  main: 374 bytes over 22 lines from emitted line 0, declared at t.mc:1:1
+  helper: 32 bytes over 3 lines from emitted line 22, declared at t.mc:20:1

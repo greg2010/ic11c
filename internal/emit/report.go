@@ -11,19 +11,33 @@ import (
 	"github.com/greg2010/ic11c/internal/source"
 )
 
-// Limits the game's editor enforces on a program, from the constants of the
-// same meaning on Assets.Scripts.UI.InputSourceCode. The chip's own compiler
-// enforces none of them, so exceeding one produces a program the player cannot
-// paste in rather than one that faults.
+// Limits the game's editor holds a program to, from the constants of the same
+// meaning on Assets.Scripts.UI.InputSourceCode.
+//
+// Only the byte budget is enforced by refusal, and only against submission:
+// InputSourceCode.UpdateFileSize leaves the submit button disabled above 4096,
+// while the paste itself still succeeds. The other two are enforced by silent
+// truncation. InputSourceCode.Paste fills a fixed grid of MaxLines slots and
+// drops every line past it, and runs each surviving line through
+// AsciiString.ParseLine, which cuts it to MaxLineLength characters. Nothing
+// reports either.
+//
+// That is worse than a refusal, and it is why a caller must treat
+// ViolationLineLength as fatal rather than advisory: a truncated float literal
+// is still a valid literal, so a program over the line width pastes cleanly and
+// runs as a different program than the one that was compiled.
 const (
-	// MaxBytes is the program size budget. Reaching it before the line limit
-	// takes an average line of 32 characters, which no measured program comes
-	// near, though which one actually binds is computed per program by
-	// Report.Binding rather than assumed.
+	// MaxBytes is the program size budget, and is inclusive: the editor enables
+	// its submit button at exactly 4096. Reaching it before the line limit takes
+	// an average of 32 charged bytes a line, which most programs stay well under,
+	// though which one actually binds is computed per program by Report.Binding
+	// rather than assumed.
 	MaxBytes = 4096
 	// MaxLines is the line count limit, and the budget most programs meet
-	// first. It is also the per-tick instruction budget, though overrunning
-	// that is not an error.
+	// first. It is InputSourceCode.MAX_LINES, which bounds the editor's grid and
+	// nothing else. The chip's per-tick instruction budget is 128 as well, but
+	// that is CircuitHousing.RUN_COUNT, a separate constant with no relationship
+	// to this one.
 	MaxLines = 128
 	// MaxLineLength is the character limit for one line. Emitted text is ASCII
 	// only, so a byte count is a character count.
@@ -41,11 +55,18 @@ const MaxSlots = ic10.NumMemorySlots
 
 // Report accounts for the size of an emitted program.
 //
-// Every line is charged len(line)+1 bytes, the line and the newline that ends
-// it, so a function's bytes sum exactly to the program's. Text omits the final
-// newline and is therefore one byte shorter than Bytes, which errs toward
-// declaring a program over budget rather than under.
+// Bytes is the number the editor computes, not the length of Text. Every byte
+// in the report is summed from the same per-line charge, so a function's bytes
+// and a site's own bytes both add up to the program's.
 type Report struct {
+	// Bytes is the program's size as InputSourceCode.UpdateFileSize counts it:
+	// each line's text, plus a two byte separator after every line that still
+	// has a line with text below it. That is the figure the editor compares
+	// against MaxBytes to decide whether the program can be submitted at all.
+	//
+	// Text is shorter, joining lines with one byte and ending without a
+	// separator. The difference is not a safety margin in either direction; it
+	// is the wrong measure, and Bytes is the right one.
 	Bytes int
 	Lines int
 	// LongestLine is the character count of the widest emitted line, which is
@@ -211,11 +232,18 @@ type Spend struct {
 	Max  int
 }
 
-// Percent is the share of the limit the program spends, rounded down. It can
-// exceed 100.
+// Percent is the share of the limit the program spends.
+//
+// A share under the limit rounds down and a share over it rounds up, so 100
+// reads only for a program at exactly the limit. Rounding both ways down would
+// report a program one byte over budget as having spent 100% of it, which is
+// the one reading that has to be distinguishable from fitting.
 func (s Spend) Percent() int {
 	if s.Max == 0 {
 		return 0
+	}
+	if s.Used > s.Max {
+		return (s.Used*100 + s.Max - 1) / s.Max
 	}
 	return s.Used * 100 / s.Max
 }
@@ -239,11 +267,11 @@ func (r Report) Spends() []Spend {
 // Spending 60% of it says nothing about how much program is left, so it is
 // reported and not ranked.
 //
-// Which of the two binds is computed rather than asserted. Lines bind on every
-// program measured — a real instruction is far short of the 32 bytes the two
-// caps would have to be balanced at — but a program of long lines can still
-// meet 4096 bytes first, and telling that program to cut lines would be wrong.
-// Ties go to whichever Spends lists first.
+// Which of the two binds is computed rather than asserted. The two caps balance
+// at 32 charged bytes a line, and most programs sit well under that and run out
+// of lines first, but a program of long lines meets 4096 bytes while still
+// under 128 lines, and telling that program to cut lines would be wrong. Ties
+// go to whichever Spends lists first.
 func (r Report) Binding() Spend {
 	var binding Spend
 	ranked := false
@@ -279,13 +307,14 @@ func (r Report) String() string {
 	}
 	if len(r.Sites) > 0 {
 		b.WriteString("\n  bytes by construct, largest first; an indented call's bytes are counted in the line above it:")
-		for _, site := range r.Sites {
+		counts, width := lineCounts(r.Sites)
+		for i, site := range r.Sites {
 			share := 0
 			if r.Bytes > 0 {
 				share = site.Bytes * 100 / r.Bytes
 			}
 			fmt.Fprintf(&b, "\n    %5d bytes  %s  %3d%%  %s%s",
-				site.Bytes, pad(source.Plural(site.Lines, "line"), len("128 lines")), share,
+				site.Bytes, pad(counts[i], width), share,
 				strings.Repeat("  ", site.Depth()), site.Label())
 		}
 	}
@@ -317,6 +346,24 @@ func (s SlotReport) describe() string {
 	}
 }
 
+// lineCounts renders the attribution table's line count cells and the width to
+// set that column to.
+//
+// The width starts at what the line limit spells, so that reports of programs
+// of different sizes align against the same column. It is a floor and not the
+// width: this report is printed precisely when a program exceeds a limit, and a
+// program over the line limit has counts the limit's own spelling is too narrow
+// to hold.
+func lineCounts(sites []SiteReport) (cells []string, width int) {
+	cells = make([]string, len(sites))
+	width = len(source.Plural(MaxLines, "line"))
+	for i, site := range sites {
+		cells[i] = source.Plural(site.Lines, "line")
+		width = max(width, len(cells[i]))
+	}
+	return cells, width
+}
+
 // pad right-aligns text in a column of width columns, so the attribution table
 // reads as columns rather than as ragged prose.
 func pad(text string, columns int) string {
@@ -344,13 +391,13 @@ type siteNode struct {
 //
 // Siblings are ordered by bytes and then by label, so a report is stable across
 // runs and two constructs of equal size keep a fixed order.
-func attribute(lines []line) []SiteReport {
+func attribute(lines []line, costs []int) []SiteReport {
 	index := make(map[string]*siteNode)
 	var roots []*siteNode
-	for _, l := range lines {
+	for i, l := range lines {
 		chain := outermostFirst(l.inline)
 		var key strings.Builder
-		key.WriteString(l.fn)
+		key.WriteString(strconv.Itoa(l.fnOrdinal))
 		var parent *siteNode
 		for depth := 0; depth <= len(chain); depth++ {
 			if depth > 0 {
@@ -366,10 +413,10 @@ func attribute(lines []line) []SiteReport {
 					parent.children = append(parent.children, node)
 				}
 			}
-			node.site.Bytes += len(l.text) + 1
+			node.site.Bytes += costs[i]
 			node.site.Lines++
 			if depth == len(chain) {
-				node.site.Own += len(l.text) + 1
+				node.site.Own += costs[i]
 			}
 			parent = node
 		}
@@ -404,12 +451,19 @@ func outermostFirst(chain []source.InlineSite) []source.InlineSite {
 }
 
 func buildReport(lines []line, funcs []FuncReport, slots SlotReport) Report {
+	costs := charges(lines)
 	report := Report{
-		Bytes:     measure(lines),
+		Bytes:     sum(costs),
 		Lines:     len(lines),
 		Slots:     slots,
-		Functions: funcs,
-		Sites:     attribute(lines),
+		Functions: slices.Clone(funcs),
+		Sites:     attribute(lines, costs),
+	}
+	// Charged here rather than as each function is laid out: what a line costs
+	// depends on whether a later function still has text below it.
+	for i := range report.Functions {
+		fn := &report.Functions[i]
+		fn.Bytes = sum(costs[fn.FirstLine : fn.FirstLine+fn.Lines])
 	}
 	for _, l := range lines {
 		report.LongestLine = max(report.LongestLine, len(l.text))
@@ -442,11 +496,73 @@ func buildReport(lines []line, funcs []FuncReport, slots SlotReport) Report {
 	return report
 }
 
-// measure charges each line its text and the newline that ends it.
-func measure(lines []line) int {
+// separatorBytes is what the editor charges between two lines.
+//
+// The authority is UpdateFileSize alone, which increments _fileSize twice for
+// each charged line and reads no newline sequence at all. The two is the game's
+// own literal, not the width of a platform separator: Environment.NewLine is one
+// byte on Linux, and correcting this constant to match it would count every
+// multi-line program short of the size the editor shows.
+const separatorBytes = 2
+
+// lastText is the index of the last line holding any text, which is the line
+// the editor stops charging separators before.
+//
+// It is 0 for a program with no text at all, which is where the editor's own
+// backward scan lands when it finds none.
+//
+// Emit never produces a blank line, so for real output this is always the final
+// index and the scan finds it immediately. It is written as the scan anyway
+// because it is a model of UpdateFileSize, and the cases where the two answers
+// differ are reached only by the synthetic fixtures that pin the model.
+func lastText(lines []line) int {
+	for i := len(lines) - 1; i > 0; i-- {
+		if lines[i].text != "" {
+			return i
+		}
+	}
+	return 0
+}
+
+// charges is what the editor's size counter adds for each line: its text, and
+// a separator while a line below it still has text.
+//
+// The editor holds MaxLines slots whatever the program's length and sums over
+// every one of them, but a slot past the program adds nothing on either count:
+// it carries no text, and it sits past the index separators stop at. Charging
+// the emitted lines therefore gives the same total as charging the grid they
+// are pasted into, which is why no grid is built here.
+//
+// The blank line handling that falls out of the backward scan — trailing blanks
+// free, an interior blank paying its separator like any other line — is a
+// faithful model of the editor and unreachable through Emit, which produces no
+// blank line at all. It is kept because the accounting is a model of
+// UpdateFileSize rather than of this emitter's current output, and the no-blank
+// guarantee is a property of the emitter that could change.
+//
+// Past MaxLines the emitted total and the editor's part company. Paste fills
+// slot i from split line i and never grows the grid, so the lines past it never
+// arrive, and each line that does arrive is cut to MaxLineLength on the way in.
+// What this charges is the whole program, which is the larger figure and the
+// useful one: such a program is already reported over the line limit or the line
+// width, and costing the truncated remnant instead would tell its author to cut
+// bytes out of a program the editor never received.
+func charges(lines []line) []int {
+	last := lastText(lines)
+	costs := make([]int, len(lines))
+	for i, l := range lines {
+		costs[i] = len(l.text)
+		if i < last {
+			costs[i] += separatorBytes
+		}
+	}
+	return costs
+}
+
+func sum(costs []int) int {
 	total := 0
-	for _, l := range lines {
-		total += len(l.text) + 1
+	for _, cost := range costs {
+		total += cost
 	}
 	return total
 }

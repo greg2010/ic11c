@@ -16,12 +16,22 @@ import (
 // errors instead of recorded as budget violations.
 var (
 	ErrVirtualRegister = errors.New("virtual register reached emission; register allocation has not run")
+	// ErrUnresolvedLabel is a label the renderer cannot spell: one naming no
+	// block, or one the readable form holds no mangled name for. Both tables are
+	// built from the same block list, so either is the renderer being handed a
+	// program the label tables were not built from.
 	ErrUnresolvedLabel = errors.New("label names no block")
 	// ErrUnspellableOperand is an operand with no text the chip's assembler
 	// reads. The chip catches malformed register text and nothing else, so an
 	// operand that renders as a Go debug form would either fail to compile on
 	// the chip or, worse, resolve to something else entirely.
 	ErrUnspellableOperand = errors.New("operand has no spelling the chip accepts")
+	// ErrUnmaterialisedNaN is a NaN literal. It is the one value the machine
+	// holds and has no literal for: the chip's operand parser reads a NaN as
+	// unset, so `move r0 nan` raises IncorrectVariable rather than loading one.
+	// mir.MaterialiseNaN replaces every such operand with the division that
+	// computes a NaN, so one reaching here means that pass did not run.
+	ErrUnmaterialisedNaN = errors.New("NaN reached emission; NaN materialisation has not run")
 )
 
 // renderer holds everything operand rendering needs beyond the operand itself.
@@ -108,15 +118,36 @@ func spellableDevice(d mir.Device) bool {
 	}
 }
 
+// label renders a branch target, which the default form numbers and the
+// readable form spells.
+//
+// The line lookup runs for both. It is what rejects a label naming no block,
+// and the readable form needs that rejection without needing the number, so the
+// line it resolves to goes unused there.
 func (r renderer) label(l mir.Label) (string, error) {
-	line, ok := r.lineOf[l.Name]
-	if !ok {
+	line, defined := r.lineOf[l.Name]
+	if !defined {
 		return "", fmt.Errorf("%q: %w", l.Name, ErrUnresolvedLabel)
 	}
 	if r.readable {
-		return r.names[l.Name], nil
+		return r.name(l.Name)
 	}
 	return strconv.Itoa(line), nil
+}
+
+// name gives the emitted spelling of a block label, which readable output uses
+// for a branch target and for the definition line the target reaches.
+//
+// The two go through here together because they are the same lookup and the same
+// failure. Spelling the definition without asking left a label the mangling
+// missed emitting as a bare ":", which is a line the chip's assembler reads as
+// an instruction it has no name for.
+func (r renderer) name(label string) (string, error) {
+	name, named := r.names[label]
+	if !named {
+		return "", fmt.Errorf("%q has no emitted name: %w", label, ErrUnresolvedLabel)
+	}
+	return name, nil
 }
 
 // enum renders one of the operand enums.
@@ -146,10 +177,7 @@ func (r renderer) enum(value uint64, names map[uint64]string) string {
 func formatImm(value float64) (string, error) {
 	switch {
 	case math.IsNaN(value):
-		// The chip's operand parser reads a NaN literal as unset, so `move r0
-		// nan` raises IncorrectVariable. NaN reaches a register only through a
-		// define or another register, neither of which is an immediate.
-		return "", fmt.Errorf("NaN has no literal spelling the chip accepts")
+		return "", ErrUnmaterialisedNaN
 	case math.IsInf(value, 1):
 		return "pinf", nil
 	case math.IsInf(value, -1):
