@@ -24,6 +24,21 @@
 // Higher pins are absent because no housing has one.
 typedef enum ic10_dev { db = -1, d0 = 0, d1, d2, d3, d4, d5 } dev;
 
+// The operand families, one per intrinsic parameter that names a machine
+// property. C admits one enumerator per name in a scope and the families share
+// several names, so a family that finds its name already declared spells it
+// with a prefix of its own rather than giving the name up, in the order they
+// appear below:
+//
+//   LogicType_ SlotType_ BatchMode_ ReagentMode_
+//
+// MicroC resolves an operand name in that same single namespace: the bare
+// spelling means what the enumerator declaring it means, in every position, and
+// a position that had to prefix a name rejects the bare spelling there and
+// names the prefixed one. Every position therefore takes an enumerator of its
+// own family's type, which is what leaves nothing here for a C driver to
+// report as an implicit enumeration cast.
+
 // Device properties: the logic type argument of the direct and batch forms.
 typedef enum ic10_logic_e {
     None [[deprecated("the game marks this logic type retired")]] = 0,
@@ -387,41 +402,36 @@ typedef enum ic10_logic_e {
 } ic10_logic;
 
 // Slot properties: the slot type argument of the slot forms.
-//
-// A name an earlier family already declared is omitted here, because C admits
-// one enumerator per name in a scope and the families give the shared names
-// different values. Spelling one where another family's type is expected still
-// compiles, since C converts between enumeration types.
 typedef enum ic10_slot_e {
-    // None = 0 omitted; ic10_logic declares it as 0.
+    SlotType_None = 0,
     Occupied = 1,
     OccupantHash = 2,
-    // Quantity = 3 omitted; ic10_logic declares it as 27.
+    SlotType_Quantity = 3,
     Damage = 4,
     Efficiency = 5,
     Health = 6,
     Growth = 7,
-    // Pressure = 8 omitted; ic10_logic declares it as 5.
-    // Temperature = 9 omitted; ic10_logic declares it as 6.
-    // Charge = 10 omitted; ic10_logic declares it as 11.
+    SlotType_Pressure = 8,
+    SlotType_Temperature = 9,
+    SlotType_Charge = 10,
     ChargeRatio = 11,
     Class = 12,
     PressureWaste = 13,
     PressureAir = 14,
     MaxQuantity = 15,
     Mature = 16,
-    // PrefabHash = 17 omitted; ic10_logic declares it as 84.
+    SlotType_PrefabHash = 17,
     Seeding = 18,
-    // LineNumber = 19 omitted; ic10_logic declares it as 173.
-    // Volume = 20 omitted; ic10_logic declares it as 67.
-    // Open = 21 omitted; ic10_logic declares it as 2.
-    // On = 22 omitted; ic10_logic declares it as 28.
-    // Lock = 23 omitted; ic10_logic declares it as 10.
+    SlotType_LineNumber = 19,
+    SlotType_Volume = 20,
+    SlotType_Open = 21,
+    SlotType_On = 22,
+    SlotType_Lock = 23,
     SortingClass = 24,
     FilterType = 25,
-    // ReferenceId = 26 omitted; ic10_logic declares it as 217.
+    SlotType_ReferenceId = 26,
     HarvestedHash = 27,
-    // Mode = 28 omitted; ic10_logic declares it as 3.
+    SlotType_Mode = 28,
     MaturityRatio = 29,
     SeedingRatio = 30,
     FreeSlots = 31,
@@ -432,8 +442,8 @@ typedef enum ic10_slot_e {
 typedef enum ic10_batch_e {
     Average = 0,
     Sum = 1,
-    // Minimum = 2 omitted; ic10_logic declares it as 277.
-    // Maximum = 3 omitted; ic10_logic declares it as 23.
+    BatchMode_Minimum = 2,
+    BatchMode_Maximum = 3,
     Count = 4,
 } ic10_batch;
 

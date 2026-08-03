@@ -1,0 +1,156 @@
+{
+  "manifest": "2546537964923579038",
+  "version": "0.2.6403.27689",
+  "reagents": [
+    {
+      "name": "Flour",
+      "hash": -811006991
+    },
+    {
+      "name": "Milk",
+      "hash": 471085864
+    },
+    {
+      "name": "Iron",
+      "hash": -666742878
+    }
+  ],
+  "prefabs": [
+    {
+      "name": "StructureSensor",
+      "hash": 1812372242,
+      "title": "Gas Sensor",
+      "logic": [
+        {
+          "name": "Power",
+          "access": "read"
+        },
+        {
+          "name": "Open",
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "name": "StructureHousing",
+      "hash": -1014431605,
+      "title": "IC Housing",
+      "circuit_holder": true,
+      "logic": [
+        {
+          "name": "Power",
+          "access": "read"
+        },
+        {
+          "name": "Mode",
+          "access": "readwrite"
+        }
+      ],
+      "slots": [
+        {
+          "index": 0,
+          "class": "Helmet",
+          "types": [
+            {
+              "name": "Occupied",
+              "access": "read"
+            },
+            {
+              "name": "Quantity",
+              "access": "readwrite"
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "class": "Suit",
+          "types": [
+            {
+              "name": "Occupied",
+              "access": "read"
+            },
+            {
+              "name": "Quantity",
+              "access": "read"
+            }
+          ]
+        }
+      ],
+      "modes": [
+        {
+          "value": 0,
+          "name": "Number"
+        },
+        {
+          "value": 1,
+          "name": "String"
+        }
+      ]
+    },
+    {
+      "name": "StructurePanel",
+      "hash": 1110935274,
+      "logic": [
+        {
+          "name": "Open",
+          "access": "readwrite"
+        },
+        {
+          "name": "Mode",
+          "access": "readwrite"
+        }
+      ],
+      "modes_unknown": true
+    },
+    {
+      "name": "StructureLouvre",
+      "hash": 693815379,
+      "logic": [
+        {
+          "name": "Power",
+          "access": "read"
+        },
+        {
+          "name": "Open",
+          "access": "write"
+        },
+        {
+          "name": "Mode",
+          "access": "readwrite"
+        }
+      ],
+      "modes": [
+        {
+          "value": 0,
+          "name": "Retracted"
+        },
+        {
+          "value": 1,
+          "name": "HalfOpen"
+        }
+      ]
+    },
+    {
+      "name": "StructureMirror",
+      "hash": -1960339480,
+      "logic": [
+        {
+          "name": "Power",
+          "access": "unknown"
+        },
+        {
+          "name": "Open",
+          "access": "unknown"
+        },
+        {
+          "name": "Mode",
+          "access": "unknown"
+        }
+      ]
+    },
+    {
+      "name": "ItemWrench",
+      "hash": -1886261558
+    }
+  ]
+}

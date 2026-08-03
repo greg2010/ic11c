@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"flag"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
@@ -42,6 +43,59 @@ func TestRenderTablesGolden(t *testing.T) {
 			}
 			assertParses(t, got)
 			compareGolden(t, filepath.Join("testdata", tt.golden), got)
+		})
+	}
+}
+
+func TestRenderDevicesGolden(t *testing.T) {
+	got, err := renderDevices(readDevicesFixture(t, "devices.json"), readFixture(t, "devices_isa.json"))
+	if err != nil {
+		t.Fatalf("renderDevices: %v", err)
+	}
+	assertParses(t, got)
+	compareGolden(t, filepath.Join("testdata", "devices.go.golden"), got)
+}
+
+func TestRenderDevicesErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		devices *Devices
+		wantErr string
+	}{
+		{
+			name:    "no prefabs",
+			devices: &Devices{},
+			wantErr: "prefab table is empty",
+		},
+		{
+			name:    "unnamed prefab",
+			devices: &Devices{Prefabs: []Prefab{{Hash: 1}}},
+			wantErr: "unnamed entry",
+		},
+		{
+			name: "property outside the ISA enumeration",
+			devices: &Devices{
+				Prefabs: []Prefab{{Name: "A", Logic: []LogicAccess{
+					{Name: "Nonexistent", Access: accessRead},
+				}}},
+			},
+			wantErr: "not a member of the ISA enumeration",
+		},
+		{
+			name:    "slot listed out of order",
+			devices: &Devices{Prefabs: []Prefab{{Name: "A", Slots: []PrefabSlot{{Index: 1, Class: "Helmet"}}}}},
+			wantErr: "the generated table indexes slots by position",
+		},
+		{
+			name:    "mode listed out of order",
+			devices: &Devices{Prefabs: []Prefab{{Name: "A", Modes: []Mode{{Value: 1, Name: "Second"}}}}},
+			wantErr: "the generated table indexes modes by position",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := renderDevices(tt.devices, readFixture(t, "devices_isa.json"))
+			checkErr(t, "renderDevices", err, tt.wantErr)
 		})
 	}
 }
@@ -122,6 +176,40 @@ func TestRenderTablesHeaderAndImports(t *testing.T) {
 	}
 }
 
+// TestRenderUndeterminedDirection covers the one direction extraction refuses
+// to write. A table can still hold it -- a hand-edited JSON, one written by an
+// older isagen -- and rendering it as the constant that says so is what makes
+// the compiler refuse the instruction instead of allocating around a guess.
+func TestRenderUndeterminedDirection(t *testing.T) {
+	got, err := renderOperands(Instruction{
+		Mnemonic: "swap",
+		Operands: []Operand{{Name: "a", Kinds: []string{kindRegister}, Direction: DirectionUnknown}},
+	})
+	if err != nil {
+		t.Fatalf("renderOperands: %v", err)
+	}
+	want := `[]Operand{{Name: "a", Kinds: []OperandKind{OperandRegister}, Direction: DirectionUnknown}}`
+	if got != want {
+		t.Errorf("renderOperands = %s, want %s", got, want)
+	}
+}
+
+// TestRenderUndecidedCircuitHolder covers the prefab whose class extends a base
+// the extraction could not place. Rendering it as an ordinary entry would state
+// that the thing holds no chip, which is the reading the extraction refused to
+// make.
+func TestRenderUndecidedCircuitHolder(t *testing.T) {
+	devices := &Devices{Prefabs: []Prefab{{Name: "StructureMount", CircuitHolderUnknown: true}}}
+	got, err := renderDevices(devices, readFixture(t, "devices_isa.json"))
+	if err != nil {
+		t.Fatalf("renderDevices: %v", err)
+	}
+	want := `{Name: "StructureMount", Hash: 0, CircuitHolderUnknown: true},`
+	if !strings.Contains(string(got), want) {
+		t.Errorf("rendered table does not contain %s", want)
+	}
+}
+
 func TestRenderTablesErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -156,6 +244,13 @@ func TestRenderTablesErrors(t *testing.T) {
 			wantErr: "has no kinds",
 		},
 		{
+			name: "operand with no direction",
+			isa: &ISA{Instructions: []Instruction{
+				{Mnemonic: "move", Opcode: 0, Operands: []Operand{{Kinds: []string{kindRegister}}}},
+			}},
+			wantErr: `unknown direction ""`,
+		},
+		{
 			name: "unparsable constant",
 			isa: &ISA{
 				Instructions: []Instruction{{Mnemonic: "move", Opcode: 0}},
@@ -172,10 +267,17 @@ func TestRenderTablesErrors(t *testing.T) {
 	}
 }
 
+// TestGenerate runs the whole stage over the checked-in tables rather than over
+// a fixture. Generation holds its inputs to the shape extraction wrote them in,
+// and no fixture small enough to read by hand satisfies that.
 func TestGenerate(t *testing.T) {
+	isaPath := filepath.Join(moduleRoot, defaultJSONPath)
+	devicesPath := filepath.Join(moduleRoot, defaultDevicesJSONPath)
+
 	dir := filepath.Join(t.TempDir(), "nested")
 	out := outputs{
 		tables:  filepath.Join(dir, "tables.gen.go"),
+		devices: filepath.Join(dir, "devices.gen.go"),
 		prelude: filepath.Join(dir, preludeFileName),
 		flags:   filepath.Join(dir, "compile_flags.txt"),
 		// One directory further down, so that the header the flags file names
@@ -183,14 +285,25 @@ func TestGenerate(t *testing.T) {
 		fixtureFlags: filepath.Join(dir, "corpus", "compile_flags.txt"),
 		basicEnums:   filepath.Join(dir, "basicenums.gen.go"),
 	}
-	if err := generate(filepath.Join("testdata", "full.json"), out); err != nil {
+	if err := generate(isaPath, devicesPath, out); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 
-	isa := readFixture(t, "full.json")
+	isa, err := readJSON[ISA](isaPath)
+	if err != nil {
+		t.Fatalf("read checked-in ISA: %v", err)
+	}
+	extracted, err := readJSON[Devices](devicesPath)
+	if err != nil {
+		t.Fatalf("read checked-in device tables: %v", err)
+	}
 	wantTables, err := renderTables(isa)
 	if err != nil {
 		t.Fatalf("renderTables: %v", err)
+	}
+	wantDevices, err := renderDevices(extracted, isa)
+	if err != nil {
+		t.Fatalf("renderDevices: %v", err)
 	}
 	wantPrelude, err := renderPrelude(isa)
 	if err != nil {
@@ -202,6 +315,7 @@ func TestGenerate(t *testing.T) {
 	}
 
 	assertParses(t, readGenerated(t, out.tables))
+	assertParses(t, readGenerated(t, out.devices))
 	assertParses(t, readGenerated(t, out.basicEnums))
 	for _, tt := range []struct {
 		name string
@@ -209,6 +323,7 @@ func TestGenerate(t *testing.T) {
 		want []byte
 	}{
 		{name: "tables", path: out.tables, want: wantTables},
+		{name: "device tables", path: out.devices, want: wantDevices},
 		{name: "prelude", path: out.prelude, want: wantPrelude},
 		{name: "compile flags", path: out.flags, want: renderCompileFlags(preludeFileName)},
 		{name: "fixture compile flags", path: out.fixtureFlags, want: renderCompileFlags("../" + preludeFileName)},
@@ -242,34 +357,77 @@ func TestGenerateInputErrors(t *testing.T) {
 		return path
 	}
 
+	// The two inputs are read and cross-checked before anything is rendered,
+	// so every case names both.
+	const oneBuild = `{"manifest":"1","version":"1"`
+	goodDevices := write("devices.json", oneBuild+`,"reagents":[{"name":"Flour","hash":1}]}`)
+
+	checkedInISA := filepath.Join(moduleRoot, defaultJSONPath)
+	isa, err := readJSON[ISA](checkedInISA)
+	if err != nil {
+		t.Fatalf("read checked-in ISA: %v", err)
+	}
+	shortDevices := write("shortdevices.json",
+		fmt.Sprintf(`{"manifest":%q,"version":%q,"reagents":[{"name":"Flour","hash":-811006991}]}`, isa.Manifest, isa.Version))
+
 	tests := []struct {
 		name    string
 		in      string
+		devices string
 		wantErr string
 	}{
-		{name: "missing file", in: filepath.Join(dir, "absent.json"), wantErr: "read"},
-		{name: "malformed json", in: write("bad.json", "{"), wantErr: "decode"},
+		{name: "missing ISA", in: filepath.Join(dir, "absent.json"), devices: goodDevices, wantErr: "read"},
+		{name: "malformed ISA", in: write("bad.json", "{"), devices: goodDevices, wantErr: "decode"},
 		{
-			name:    "unknown field",
+			name:    "unknown ISA field",
 			in:      write("extra.json", `{"manifest":"1","version":"1","surprise":true}`),
+			devices: goodDevices,
 			wantErr: `unknown field "surprise"`,
 		},
 		{
-			name:    "empty table",
-			in:      write("empty.json", `{"manifest":"1","version":"1"}`),
-			wantErr: "instruction table is empty",
+			name:    "missing device tables",
+			in:      write("empty.json", oneBuild+`}`),
+			devices: filepath.Join(dir, "absent.json"),
+			wantErr: "read",
+		},
+		{
+			name:    "unknown device field",
+			in:      write("empty2.json", oneBuild+`}`),
+			devices: write("extradevices.json", oneBuild+`,"surprise":true}`),
+			wantErr: `unknown field "surprise"`,
+		},
+		{
+			name:    "tables from two builds",
+			in:      write("empty3.json", oneBuild+`}`),
+			devices: write("otherbuild.json", `{"manifest":"2","version":"1","reagents":[{"name":"Flour","hash":1}]}`),
+			wantErr: "different game builds",
+		},
+		{
+			name:    "ISA table of the wrong shape",
+			in:      write("empty4.json", oneBuild+`}`),
+			devices: goodDevices,
+			wantErr: "instructions: got 0, want",
+		},
+		{
+			// The ISA half is whole and the device half is not, which is the
+			// half check:codegen would otherwise render straight through.
+			name:    "device tables of the wrong shape",
+			in:      checkedInISA,
+			devices: shortDevices,
+			wantErr: "reagents: got 1, want",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			out := outputs{
 				tables:       filepath.Join(dir, "out.go"),
+				devices:      filepath.Join(dir, "devices.gen.go"),
 				prelude:      filepath.Join(dir, preludeFileName),
 				flags:        filepath.Join(dir, "compile_flags.txt"),
 				fixtureFlags: filepath.Join(dir, "corpus", "compile_flags.txt"),
 				basicEnums:   filepath.Join(dir, "basicenums.gen.go"),
 			}
-			checkErr(t, "generate", generate(tt.in, out), tt.wantErr)
+			checkErr(t, "generate", generate(tt.in, tt.devices, out), tt.wantErr)
 		})
 	}
 }
@@ -317,16 +475,20 @@ func TestGoFloat(t *testing.T) {
 
 func readFixture(t *testing.T, name string) *ISA {
 	t.Helper()
-	path := filepath.Join("testdata", name)
-	data, err := os.ReadFile(path)
+	isa, err := readJSON[ISA](filepath.Join("testdata", name))
 	if err != nil {
-		t.Fatalf("read fixture %s: %v", path, err)
+		t.Fatalf("read fixture: %v", err)
 	}
-	var isa ISA
-	if err := decodeISA(data, &isa); err != nil {
-		t.Fatalf("decode fixture %s: %v", path, err)
+	return isa
+}
+
+func readDevicesFixture(t *testing.T, name string) *Devices {
+	t.Helper()
+	d, err := readJSON[Devices](filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
 	}
-	return &isa
+	return d
 }
 
 // assertParses confirms the generated text is syntactically valid Go, which

@@ -23,13 +23,18 @@ type sourceTree struct {
 	// byName indexes files by bare type name, so a type the game source
 	// mentions without its namespace can still be found.
 	byName map[string][]string
+	// files is every path the walk found. Whether the tree declares a type is
+	// decided against this rather than against a failed read, so that a file
+	// that is there and will not open cannot be mistaken for a type from
+	// another assembly.
+	files map[string]bool
 }
 
 // newSourceTree indexes the decompiled C# under root. It fails on an empty
 // tree, which is what a decompilation that produced nothing looks like from
 // here.
 func newSourceTree(root string) (*sourceTree, error) {
-	tree := &sourceTree{root: root, byName: make(map[string][]string)}
+	tree := &sourceTree{root: root, byName: make(map[string][]string), files: make(map[string]bool)}
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -39,6 +44,7 @@ func newSourceTree(root string) (*sourceTree, error) {
 		}
 		name := strings.TrimSuffix(filepath.Base(path), csharpExt)
 		tree.byName[name] = append(tree.byName[name], path)
+		tree.files[filepath.Clean(path)] = true
 		return nil
 	})
 	if err != nil {
@@ -52,13 +58,28 @@ func newSourceTree(root string) (*sourceTree, error) {
 
 // qualified returns the source of a type named with its full namespace, which
 // the layout maps directly onto a path.
+//
+// A name the tree holds no file for yields errNotFound, which is the ordinary
+// outcome for a type from another assembly. Any other error means the file is
+// there and could not be read: that says nothing about what the type declares,
+// and a caller that read it as an absence would strip the whole of an
+// inheritance chain off every class below it.
 func (t *sourceTree) qualified(fullName string) (string, error) {
 	path := filepath.Join(t.root, filepath.Join(strings.Split(fullName, ".")...)+csharpExt)
+	if !t.files[path] {
+		return "", fmt.Errorf("type %s under %s: %w", fullName, t.root, errNotFound)
+	}
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read type %s: %w", fullName, err)
 	}
 	return string(src), nil
+}
+
+// declares reports whether the tree holds a file for a bare type name, in any
+// namespace.
+func (t *sourceTree) declares(name string) bool {
+	return len(t.byName[name]) > 0
 }
 
 // enumType returns the source declaring the named enum along with the name it

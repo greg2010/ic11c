@@ -58,9 +58,33 @@ type Instruction struct {
 // text gives it and is empty for the unnamed forms. Kinds lists the accepted
 // alternatives in source order; it always holds at least one entry.
 type Operand struct {
-	Name  string   `json:"name,omitempty"`
-	Kinds []string `json:"kinds"`
+	Name      string    `json:"name,omitempty"`
+	Kinds     []string  `json:"kinds"`
+	Direction Direction `json:"direction"`
 }
+
+// Direction is what an instruction does to the register an operand names. It is
+// read from the operation class the chip's parser builds, not inferred from the
+// operand's position, so a build that moves a write is carried rather than
+// missed.
+type Direction string
+
+// The operand directions. DirectionReadWrite is the register an instruction
+// folds a new value into rather than replacing, which is a use as well as a
+// definition wherever a caller allocates registers.
+//
+// DirectionUnknown is the spelling that says nothing. No extraction produces
+// it: an operand whose direction the operation classes do not settle stops
+// extraction rather than reaching a table. It exists because a hand-edited
+// table or one written by an older isagen can still carry it, and rendering it
+// as the constant that says so is what makes the compiler refuse the
+// instruction instead of allocating around a guess.
+const (
+	DirectionRead      Direction = "read"
+	DirectionWrite     Direction = "write"
+	DirectionReadWrite Direction = "readwrite"
+	DirectionUnknown   Direction = "unknown"
+)
 
 // EnumMember is one member of an operand enum. Value is the integer the game
 // resolves the member name to, which is what generated code emits in place of
@@ -168,6 +192,14 @@ var kindTokens = func() map[string]string {
 	}
 	return m
 }()
+
+// goDirections maps each operand direction to its internal/ic10 constant name.
+var goDirections = map[Direction]string{
+	DirectionRead:      "DirectionRead",
+	DirectionWrite:     "DirectionWrite",
+	DirectionReadWrite: "DirectionReadWrite",
+	DirectionUnknown:   "DirectionUnknown",
+}
 
 // goOperandKinds maps each operand kind to its internal/ic10 constant name.
 var goOperandKinds = map[string]string{

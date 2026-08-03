@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,12 +70,12 @@ func TestSourceTreeQualified(t *testing.T) {
 		{
 			name:     "absent type",
 			fullName: "Assets.Scripts.Objects.Electrical.LogicBase",
-			wantErr:  "read type Assets.Scripts.Objects.Electrical.LogicBase",
+			wantErr:  "type Assets.Scripts.Objects.Electrical.LogicBase under",
 		},
 		{
 			name:     "bare name is not resolved here",
 			fullName: "Slot",
-			wantErr:  "read type Slot",
+			wantErr:  "type Slot under",
 		},
 	}
 	for _, tt := range tests {
@@ -87,6 +88,33 @@ func TestSourceTreeQualified(t *testing.T) {
 				t.Errorf("qualified(%q) = %q, want %q", tt.fullName, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestSourceTreeUnreadableFile separates a type the tree declares nothing under
+// from one it declares in a file that will not open. The first is a type from
+// another assembly and ends an inheritance chain; reading the second as the
+// same thing takes every property a class declares out of every prefab below
+// it, and says so nowhere.
+func TestSourceTreeUnreadableFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file whatever its mode")
+	}
+	root := writeTree(t, map[string]string{"Assets/Scripts/Objects/Slot.cs": "slot"})
+	if err := os.Chmod(filepath.Join(root, "Assets", "Scripts", "Objects", "Slot.cs"), 0); err != nil {
+		t.Fatalf("chmod fixture: %v", err)
+	}
+	tree, err := newSourceTree(root)
+	if err != nil {
+		t.Fatalf("newSourceTree: %v", err)
+	}
+
+	_, err = tree.qualified("Assets.Scripts.Objects.Slot")
+	if !checkErr(t, "qualified", err, "read type Assets.Scripts.Objects.Slot") {
+		return
+	}
+	if errors.Is(err, errNotFound) {
+		t.Errorf("qualified reported an unreadable file as an absent type: %v", err)
 	}
 }
 

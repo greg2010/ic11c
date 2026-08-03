@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Language>
+  <Name>English</Name>
+  <Things>
+    <RecordThing>
+      <Key>StructureSensor</Key>
+      <Value>Gas Sensor</Value>
+      <Description>Reads the atmosphere.</Description>
+    </RecordThing>
+    <RecordThing>
+      <Key>StructureHousing</Key>
+      <Value>IC Housing</Value>
+      <Description>Holds a chip.</Description>
+    </RecordThing>
+  </Things>
+</Language>

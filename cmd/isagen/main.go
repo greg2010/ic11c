@@ -26,7 +26,9 @@ import (
 // opening a fixture is configured and there is still one header in the tree.
 const (
 	defaultJSONPath         = "internal/ic10/isa.json"
+	defaultDevicesJSONPath  = "internal/ic10/devices.json"
 	defaultTablesPath       = "internal/ic10/tables.gen.go"
+	defaultDevicesPath      = "internal/ic10/devices.gen.go"
 	defaultPreludePath      = "internal/ic10/" + preludeFileName
 	defaultFlagsPath        = "internal/ic10/compile_flags.txt"
 	defaultFixtureFlagsPath = "internal/parser/testdata/compile_flags.txt"
@@ -54,11 +56,16 @@ func rootCmd() *cobra.Command {
 		Short: "Build the IC10 instruction and operand tables",
 		Long: `isagen recovers the IC10 machine tables from the Stationeers assembly.
 
-extract reads a decompiled copy of the assembly into ` + defaultJSONPath + `.
-generate renders ` + defaultTablesPath + `, ` + defaultPreludePath + `,
-` + defaultFlagsPath + `, ` + defaultFixtureFlagsPath + ` and
-` + defaultBasicEnumsPath + ` from that JSON, and needs nothing else. Every
-output is checked in.
+extract reads a decompiled copy of the assembly into ` + defaultJSONPath + `,
+and devices reads the same copy into ` + defaultDevicesJSONPath + `, which
+describes the game things a program names by hash rather than through the
+instruction set. generate renders ` + defaultTablesPath + `,
+` + defaultDevicesPath + `, ` + defaultPreludePath + `, ` + defaultFlagsPath + `,
+` + defaultFixtureFlagsPath + ` and ` + defaultBasicEnumsPath + ` from that
+JSON, and needs nothing else. Every output is checked in.
+
+devices and generate both refuse a pair of JSON files whose manifest and
+version disagree, which is what holds the two to one game build.
 
 digest fingerprints the game types that hand-written Go transliterates into
 ` + defaultDigestPath + `, and dump writes their decompiled source out for
@@ -77,7 +84,7 @@ diffing. Neither is part of the build; see docs/game-updates.md.`,
 			return errors.New("expected a subcommand")
 		},
 	}
-	root.AddCommand(extractCmd(), generateCmd(), digestCmd(), dumpCmd())
+	root.AddCommand(extractCmd(), devicesCmd(), generateCmd(), digestCmd(), dumpCmd())
 	return root
 }
 
@@ -99,20 +106,44 @@ func extractCmd() *cobra.Command {
 	return cmd
 }
 
+func devicesCmd() *cobra.Command {
+	var in deviceInputs
+	var out string
+
+	cmd := &cobra.Command{
+		Use:   "devices",
+		Short: "Read decompiled game source and the prefab roster into " + defaultDevicesJSONPath,
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return devices(in, out)
+		},
+	}
+	cmd.Flags().StringVar(&in.sourceDir, "source", "", "directory of decompiled C#, one file per type under its namespace")
+	cmd.Flags().StringVar(&in.assembly, "assembly", "", "assembly the source was decompiled from, read for its file version")
+	cmd.Flags().StringVar(&in.manifest, "manifest", "", "gid of the Steam depot manifest the assembly came from")
+	cmd.Flags().StringVar(&in.prefabs, "prefabs", "", "path of the prefab roster tools/prefabreader wrote from the game's serialized files")
+	cmd.Flags().StringVar(&in.names, "names", "", "path of the English localization XML, read for prefab titles")
+	cmd.Flags().StringVar(&in.isa, "isa", defaultJSONPath, "path of the ISA JSON the result must agree with")
+	cmd.Flags().StringVar(&out, "out", defaultDevicesJSONPath, "path of the device JSON to write")
+	return cmd
+}
+
 func generateCmd() *cobra.Command {
-	var in string
+	var in, devicesIn string
 	var out outputs
 
 	cmd := &cobra.Command{
 		Use:   "generate",
-		Short: "Render the Go tables and the C prelude from the checked-in ISA JSON",
+		Short: "Render the Go tables and the C prelude from the checked-in ISA and device JSON",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return generate(in, out)
+			return generate(in, devicesIn, out)
 		},
 	}
 	cmd.Flags().StringVar(&in, "in", defaultJSONPath, "path of the ISA JSON to read")
+	cmd.Flags().StringVar(&devicesIn, "devices-in", defaultDevicesJSONPath, "path of the device JSON to read")
 	cmd.Flags().StringVar(&out.tables, "out", defaultTablesPath, "path of the Go tables to write")
+	cmd.Flags().StringVar(&out.devices, "devices", defaultDevicesPath, "path of the Go device tables to write")
 	cmd.Flags().StringVar(&out.prelude, "prelude", defaultPreludePath, "path of the C prelude header to write")
 	cmd.Flags().StringVar(&out.flags, "compile-flags", defaultFlagsPath, "path of the C argument file to write beside the prelude")
 	cmd.Flags().StringVar(&out.fixtureFlags, "fixture-compile-flags", defaultFixtureFlagsPath, "path of the C argument file to write beside the MicroC corpus")

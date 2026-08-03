@@ -24,6 +24,21 @@
 // Higher pins are absent because no housing has one.
 typedef enum ic10_dev { db = -1, d0 = 0, d1, d2, d3, d4, d5 } dev;
 
+// The operand families, one per intrinsic parameter that names a machine
+// property. C admits one enumerator per name in a scope and the families share
+// several names, so a family that finds its name already declared spells it
+// with a prefix of its own rather than giving the name up, in the order they
+// appear below:
+//
+//   LogicType_ SlotType_ BatchMode_ ReagentMode_
+//
+// MicroC resolves an operand name in that same single namespace: the bare
+// spelling means what the enumerator declaring it means, in every position, and
+// a position that had to prefix a name rejects the bare spelling there and
+// names the prefixed one. Every position therefore takes an enumerator of its
+// own family's type, which is what leaves nothing here for a C driver to
+// report as an implicit enumeration cast.
+
 // Device properties: the logic type argument of the direct and batch forms.
 typedef enum ic10_logic_e {
     None [[deprecated("the game marks this logic type retired")]] = 0,
@@ -32,13 +47,8 @@ typedef enum ic10_logic_e {
 } ic10_logic;
 
 // Slot properties: the slot type argument of the slot forms.
-//
-// A name an earlier family already declared is omitted here, because C admits
-// one enumerator per name in a scope and the families give the shared names
-// different values. Spelling one where another family's type is expected still
-// compiles, since C converts between enumeration types.
 typedef enum ic10_slot_e {
-    // None = 0 omitted; ic10_logic declares it as 0.
+    SlotType_None = 0,
     Occupied [[deprecated("the game marks this slot type retired")]] = 1,
 } ic10_slot;
 

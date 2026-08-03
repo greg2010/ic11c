@@ -113,6 +113,21 @@ func matchDelim(src string, start int, open, closing byte) (body string, end int
 	return "", 0, fmt.Errorf("closing %q for delimiter opened at offset %d: %w", string(closing), bodyStart-1, errNotFound)
 }
 
+// braceBlockAt returns the body of the brace block src opens with, ignoring
+// only the layout whitespace before it.
+//
+// Requiring the block to be the very next thing is what keeps a declaration
+// written without one from being read as the block belonging to whatever
+// follows it.
+func braceBlockAt(src string) (string, error) {
+	rest := strings.TrimLeft(src, " \t\r\n")
+	if !strings.HasPrefix(rest, "{") {
+		return "", fmt.Errorf(`opening "{": %w`, errNotFound)
+	}
+	body, _, err := matchDelim(rest, 0, '{', '}')
+	return body, err
+}
+
 // splitTop splits s on the sep byte, ignoring separators nested inside
 // brackets or literals. Empty trailing elements from a trailing separator are
 // dropped, matching how C# initializer lists are written.
@@ -276,6 +291,79 @@ func parseListInitializer(src, field, elemType string) ([]string, error) {
 		members = append(members, strings.TrimPrefix(entry, prefix))
 	}
 	return members, nil
+}
+
+var constructedEntryRE = regexp.MustCompile(`^new\s+([A-Za-z_]\w*)\s*\(`)
+
+// parseConstructedList recovers the type names constructed by a
+// `field = new List<elemType> { new A(...), new B(...) }` declaration, in
+// source order.
+//
+// It is the sibling of parseListInitializer for a table the game writes as one
+// class per entry rather than as enum members. An entry that is not a
+// constructor call is an error: the alternative is a table silently missing
+// whatever the game added.
+func parseConstructedList(src, field, elemType string) ([]string, error) {
+	decl := fmt.Sprintf("%s = new List<%s>", field, elemType)
+	_, after, ok := strings.Cut(src, decl)
+	if !ok {
+		return nil, fmt.Errorf("initializer for %s: %w", field, errNotFound)
+	}
+	body, err := braceBlockAt(after)
+	if err != nil {
+		return nil, fmt.Errorf("initializer for %s: %w", field, err)
+	}
+
+	var types []string
+	for _, entry := range splitTop(body, ',') {
+		m := constructedEntryRE.FindStringSubmatch(strings.TrimSpace(entry))
+		if m == nil {
+			return nil, fmt.Errorf("initializer for %s: unrecognized entry %q", field, strings.TrimSpace(entry))
+		}
+		types = append(types, m[1])
+	}
+	if len(types) == 0 {
+		return nil, fmt.Errorf("initializer for %s: no entries", field)
+	}
+	return types, nil
+}
+
+var switchArmRE = regexp.MustCompile(`(-?\d+)\s*=>\s*new\s+([A-Za-z_]\w*)\s*\(`)
+
+// parseConstructorSwitch recovers the arms of a
+// `subject switch { 0 => new A(x), 1 => new B(x), _ => null }` expression,
+// mapping each integer label to the type it constructs. The discard arm names
+// no label and is skipped.
+//
+// The arms are matched rather than split apart, because the `=>` of an arm
+// carries a bracket the top level splitter counts as nesting. That laxness is
+// answered by the caller, which holds the recovered labels to a dense range and
+// to a second declaration of the same table.
+func parseConstructorSwitch(src, subject string) (map[int64]string, error) {
+	_, after, ok := strings.Cut(src, subject+" switch")
+	if !ok {
+		return nil, fmt.Errorf("switch on %s: %w", subject, errNotFound)
+	}
+	body, err := braceBlockAt(after)
+	if err != nil {
+		return nil, fmt.Errorf("switch on %s: %w", subject, err)
+	}
+
+	arms := make(map[int64]string)
+	for _, m := range switchArmRE.FindAllStringSubmatch(body, -1) {
+		label, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("switch on %s: parse label %q: %w", subject, m[1], err)
+		}
+		if previous, ok := arms[label]; ok {
+			return nil, fmt.Errorf("switch on %s: label %d constructs both %s and %s", subject, label, previous, m[2])
+		}
+		arms[label] = m[2]
+	}
+	if len(arms) == 0 {
+		return nil, fmt.Errorf("switch on %s: no arms", subject)
+	}
+	return arms, nil
 }
 
 // internalEnum is one entry of ProgrammableChip.InternalEnums, the list the
@@ -599,7 +687,7 @@ func csharpDouble(expr string) (float64, error) {
 	}
 	v, err := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSuffix(expr, "d"), "D"), 64)
 	if err != nil {
-		return 0, fmt.Errorf("unsupported double expression %q", expr)
+		return 0, fmt.Errorf("unsupported double expression %q: %w", expr, err)
 	}
 	return v, nil
 }

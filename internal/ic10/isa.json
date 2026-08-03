@@ -11,7 +11,8 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "device",
@@ -19,12 +20,14 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logictype"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -40,17 +43,20 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logictype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -63,7 +69,8 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "device",
@@ -71,17 +78,20 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "slotindex"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logicslottype"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -94,7 +104,8 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "device",
@@ -102,17 +113,20 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "reagentmode"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "integer"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -125,17 +139,20 @@
         {
           "kinds": [
             "devicehash"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logictype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -148,22 +165,26 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "kinds": [
             "devicehash"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logictype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "batchmode"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -176,13 +197,15 @@
         {
           "kinds": [
             "string"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "register",
             "device"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -195,14 +218,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -215,21 +240,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -242,21 +270,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -269,7 +300,8 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "device",
@@ -277,7 +309,8 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -290,7 +323,8 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "device",
@@ -298,7 +332,8 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -311,21 +346,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -338,21 +376,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -365,21 +406,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -392,21 +436,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -419,21 +466,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -446,21 +496,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -473,28 +526,32 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -507,28 +564,32 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -541,21 +602,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -568,21 +632,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -595,21 +662,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -622,21 +692,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -649,21 +722,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -676,21 +752,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -703,21 +782,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -730,7 +812,8 @@
         {
           "kinds": [
             "integer"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -745,14 +828,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -767,14 +852,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -789,14 +876,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -811,14 +900,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -834,14 +925,16 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -857,14 +950,16 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -879,21 +974,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -908,21 +1006,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -937,28 +1038,32 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "d",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -973,28 +1078,32 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "d",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1007,7 +1116,8 @@
         {
           "kinds": [
             "integer"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1023,14 +1133,16 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1046,14 +1158,16 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1068,14 +1182,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1090,14 +1206,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1112,14 +1230,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1134,14 +1254,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1156,21 +1278,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1185,21 +1310,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1212,7 +1340,8 @@
         {
           "kinds": [
             "integer"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1228,14 +1357,16 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1251,14 +1382,16 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1273,14 +1406,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1295,14 +1430,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1317,14 +1454,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1339,14 +1478,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1361,21 +1502,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1390,21 +1534,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1419,28 +1566,32 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "d",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1455,28 +1606,32 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "d",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1489,14 +1644,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1509,14 +1666,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1529,14 +1688,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1549,14 +1710,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1569,14 +1732,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1589,21 +1754,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1616,21 +1784,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1643,14 +1814,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1663,14 +1836,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1683,14 +1858,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1703,7 +1880,8 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         }
       ]
     },
@@ -1712,7 +1890,7 @@
       "opcode": 69,
       "deprecated": false,
       "example": "yield",
-      "operands": null
+      "operands": []
     },
     {
       "mnemonic": "label",
@@ -1723,12 +1901,14 @@
         {
           "kinds": [
             "device"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "string"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1741,7 +1921,8 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         }
       ]
     },
@@ -1756,7 +1937,8 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1769,7 +1951,8 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         }
       ]
     },
@@ -1778,7 +1961,7 @@
       "opcode": 74,
       "deprecated": false,
       "example": "hcf",
-      "operands": null
+      "operands": []
     },
     {
       "mnemonic": "select",
@@ -1789,28 +1972,32 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1825,21 +2012,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1854,21 +2044,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1883,21 +2076,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1912,21 +2108,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1941,21 +2140,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1970,21 +2172,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -1999,21 +2204,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2028,21 +2236,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2057,21 +2268,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2086,21 +2300,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2115,21 +2332,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2144,21 +2364,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2173,28 +2396,32 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "d",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2209,28 +2436,32 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "d",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2245,14 +2476,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2267,14 +2500,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2289,21 +2524,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2318,21 +2556,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2347,14 +2588,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2369,14 +2612,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2391,21 +2636,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2420,21 +2668,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2449,14 +2700,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2471,14 +2724,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2493,21 +2748,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2522,21 +2780,24 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2549,14 +2810,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2569,14 +2832,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2589,14 +2854,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2609,14 +2876,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2629,14 +2898,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2649,14 +2920,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2669,21 +2942,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2696,21 +2972,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2723,12 +3002,14 @@
         {
           "kinds": [
             "string"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2743,7 +3024,8 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2756,14 +3038,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2776,14 +3060,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2796,14 +3082,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2816,14 +3104,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2836,14 +3126,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2856,14 +3148,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2876,21 +3170,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2905,14 +3202,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2927,14 +3226,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2947,14 +3248,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2967,14 +3270,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -2987,27 +3292,32 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "kinds": [
             "devicehash"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "slotindex"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logicslottype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "batchmode"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3020,27 +3330,32 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "kinds": [
             "devicehash"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "namehash"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logictype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "batchmode"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3053,22 +3368,26 @@
         {
           "kinds": [
             "devicehash"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "namehash"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logictype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3081,32 +3400,38 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "kinds": [
             "devicehash"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "namehash"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "slotindex"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logicslottype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "batchmode"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3122,22 +3447,26 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "slotindex"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logicslottype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3150,22 +3479,26 @@
         {
           "kinds": [
             "devicehash"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "slotindex"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logicslottype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3178,21 +3511,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3205,21 +3541,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3232,21 +3571,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3259,21 +3601,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3286,14 +3631,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3306,19 +3653,22 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "id",
           "kinds": [
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logictype"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3333,17 +3683,20 @@
           "kinds": [
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logictype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3358,14 +3711,16 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "value",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3378,21 +3733,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "id",
           "kinds": [
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "address",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3407,21 +3765,24 @@
           "kinds": [
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "address",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "value",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3434,7 +3795,8 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "device",
@@ -3442,14 +3804,16 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "address",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3465,21 +3829,24 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "address",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "value",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3492,7 +3859,8 @@
         {
           "kinds": [
             "device"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3507,7 +3875,8 @@
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3520,19 +3889,22 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "kinds": [
             "device"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "reagentHash",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3548,19 +3920,22 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logictype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3576,19 +3951,22 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logictype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3601,21 +3979,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3628,28 +4009,32 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3662,28 +4047,32 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "readwrite"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3696,28 +4085,32 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "c",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3730,14 +4123,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3750,28 +4145,32 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "min",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "max",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3784,21 +4183,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -3811,21 +4213,24 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "name": "b",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     }

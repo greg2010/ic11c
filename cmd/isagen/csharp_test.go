@@ -223,6 +223,133 @@ func TestParseListInitializer(t *testing.T) {
 	}
 }
 
+func TestParseConstructedList(t *testing.T) {
+	tests := []struct {
+		name     string
+		src      string
+		field    string
+		elemType string
+		want     []string
+		wantErr  string
+	}{
+		{
+			name:     "populated",
+			src:      "AllReagents = new List<Reagent>\n{\n\tnew Flour(0.0),\n\tnew Milk(0.0)\n};\n",
+			field:    "AllReagents",
+			elemType: "Reagent",
+			want:     []string{"Flour", "Milk"},
+		},
+		{
+			name:     "constructor arguments are not entries",
+			src:      "AllReagents = new List<Reagent>\n{\n\tnew Flour(new Milk(0.0), 1)\n};\n",
+			field:    "AllReagents",
+			elemType: "Reagent",
+			want:     []string{"Flour"},
+		},
+		{
+			name:     "missing declaration",
+			src:      "public static int Unrelated = 1;\n",
+			field:    "AllReagents",
+			elemType: "Reagent",
+			wantErr:  "initializer for AllReagents: not found",
+		},
+		{
+			// The block belonging to whatever follows must not be read as this
+			// declaration's.
+			name:     "no initializer block",
+			src:      "AllReagents = new List<Reagent>();\nvoid F()\n{\n\tnew Flour(0.0);\n}\n",
+			field:    "AllReagents",
+			elemType: "Reagent",
+			wantErr:  `initializer for AllReagents: opening "{": not found`,
+		},
+		{
+			name:     "entry is not a constructor call",
+			src:      "AllReagents = new List<Reagent>\n{\n\tReagent.Flour\n};\n",
+			field:    "AllReagents",
+			elemType: "Reagent",
+			wantErr:  `unrecognized entry "Reagent.Flour"`,
+		},
+		{
+			name:     "empty initializer block",
+			src:      "AllReagents = new List<Reagent>\n{\n};\n",
+			field:    "AllReagents",
+			elemType: "Reagent",
+			wantErr:  "initializer for AllReagents: no entries",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseConstructedList(tt.src, tt.field, tt.elemType)
+			if !checkErr(t, "parseConstructedList", err, tt.wantErr) {
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("parseConstructedList = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseConstructorSwitch(t *testing.T) {
+	const populated = "return reagentId switch\n{\n\t0 => new Flour(quantity), \n\t1 => new Milk(quantity), \n\t_ => null, \n};\n"
+
+	tests := []struct {
+		name    string
+		src     string
+		subject string
+		want    map[int64]string
+		wantErr string
+	}{
+		{
+			name:    "populated",
+			src:     populated,
+			subject: "reagentId",
+			want:    map[int64]string{0: "Flour", 1: "Milk"},
+		},
+		{
+			name:    "sparse and out of order labels",
+			src:     "return id switch\n{\n\t7 => new B(q), \n\t2 => new A(q), \n\t_ => null, \n};\n",
+			subject: "id",
+			want:    map[int64]string{2: "A", 7: "B"},
+		},
+		{
+			name:    "missing switch",
+			src:     "return null;\n",
+			subject: "reagentId",
+			wantErr: "switch on reagentId: not found",
+		},
+		{
+			name:    "no block",
+			src:     "return reagentId switch;\n",
+			subject: "reagentId",
+			wantErr: `switch on reagentId: opening "{": not found`,
+		},
+		{
+			name:    "no constructing arm",
+			src:     "return reagentId switch\n{\n\t_ => null, \n};\n",
+			subject: "reagentId",
+			wantErr: "switch on reagentId: no arms",
+		},
+		{
+			name:    "duplicate label",
+			src:     "return reagentId switch\n{\n\t0 => new Flour(q), \n\t0 => new Milk(q), \n};\n",
+			subject: "reagentId",
+			wantErr: "label 0 constructs both Flour and Milk",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseConstructorSwitch(tt.src, tt.subject)
+			if !checkErr(t, "parseConstructorSwitch", err, tt.wantErr) {
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("parseConstructorSwitch = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseInternalEnums(t *testing.T) {
 	const decl = "\t\tInternalEnums = new List<IScriptEnum>\n\t\t{\n"
 

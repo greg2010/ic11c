@@ -25,6 +25,26 @@ const CompileFlagsFileName = "compile_flags.txt"
 // directory under it.
 const PreludeDirName = ".ic11c"
 
+// The prefix each operand family spells a name with where an earlier family has
+// already taken the bare spelling.
+//
+// C admits one enumerator per name in a scope, and the families share names, so
+// Prelude gives each shared name to the first family that carries it and
+// prefixes it in every later one. A position resolves the prefixed spelling only
+// where the family actually gave the bare name up: nothing else is declared, and
+// a program naming one would not be C.
+//
+// The families claim names in the order these are written. cmd/isagen writes the
+// header from its own copy of both, since it cannot depend on the tables it
+// generates, and [TestPreludeEnumeratorsResolveAsMicroCDoes] holds the two
+// together.
+const (
+	LogicTypePrefix   = "LogicType_"
+	SlotTypePrefix    = "SlotType_"
+	BatchModePrefix   = "BatchMode_"
+	ReagentModePrefix = "ReagentMode_"
+)
+
 // Prelude is a C header declaring everything a MicroC program may name: the
 // device pins, the four operand enums, the machine constants and the
 // intrinsics. It lets a C editor parse and complete a MicroC source file.

@@ -150,7 +150,7 @@ func extract(sourceDir, assembly, manifest, outPath string) error {
 	if err := validate(isa); err != nil {
 		return err
 	}
-	return writeISA(isa, outPath)
+	return writeJSON(isa, outPath)
 }
 
 // extractISA reads the game types out of the decompiled source and assembles
@@ -188,12 +188,17 @@ func extractISA(tree *sourceTree) (*ISA, error) {
 	if err != nil {
 		return nil, err
 	}
+	uses, err := parseOperandUses(chip)
+	if err != nil {
+		return nil, err
+	}
 
 	deprecated := make(map[string]bool, len(deprecatedCommands))
 	for _, name := range deprecatedCommands {
 		deprecated[name] = true
 	}
 	instructions := make([]Instruction, 0, len(commands))
+	var unreadable []string
 	for _, member := range commands {
 		operands, ok := signatures[member.Name]
 		if !ok {
@@ -203,6 +208,14 @@ func extractISA(tree *sourceTree) (*ISA, error) {
 		if err != nil {
 			return nil, err
 		}
+		used, ok := uses[member.Name]
+		if !ok {
+			return nil, fmt.Errorf("ScriptCommand.%s builds no operation, so nothing says what it writes", member.Name)
+		}
+		if used.undetermined != "" {
+			unreadable = append(unreadable, fmt.Sprintf("%s: %s", member.Name, used.undetermined))
+		}
+		operands = withDirections(operands, used)
 		instructions = append(instructions, Instruction{
 			Mnemonic:   member.Name,
 			Opcode:     int(member.Value),
@@ -213,6 +226,13 @@ func extractISA(tree *sourceTree) (*ISA, error) {
 	}
 	if len(signatures) != len(instructions) {
 		return nil, fmt.Errorf("GetCommandExample covers %d commands but ScriptCommand has %d members", len(signatures), len(instructions))
+	}
+	// Every one is reported, since a game update that moves the operation
+	// classes moves them for a family of instructions at once and each round
+	// trip through the extraction container costs minutes.
+	if len(unreadable) > 0 {
+		return nil, fmt.Errorf("the direction of an operand cannot be read from these operations:\n  %s",
+			strings.Join(unreadable, "\n  "))
 	}
 
 	logicTypes, err := markDeprecated(sources[typeLogicType], "LogicType", logicBase, "Deprecated")
@@ -329,17 +349,20 @@ func validate(isa *ISA) error {
 	check("logic batch methods", len(isa.BatchModes), wantBatchModes)
 	check("logic reagent modes", len(isa.ReagentModes), wantReagentModes)
 
-	for enumName, members := range map[string][]EnumMember{
-		"LogicBatchMethod": isa.BatchModes,
-		"LogicReagentMode": isa.ReagentModes,
+	for _, enum := range []struct {
+		name    string
+		members []EnumMember
+	}{
+		{name: "LogicBatchMethod", members: isa.BatchModes},
+		{name: "LogicReagentMode", members: isa.ReagentModes},
 	} {
-		for name, want := range wantEnumMembers[enumName] {
-			i := slices.IndexFunc(members, func(m EnumMember) bool { return m.Name == name })
+		for name, want := range wantEnumMembers[enum.name] {
+			i := slices.IndexFunc(enum.members, func(m EnumMember) bool { return m.Name == name })
 			switch {
 			case i < 0:
-				problems = append(problems, fmt.Sprintf("%s.%s: missing", enumName, name))
-			case members[i].Value != want:
-				problems = append(problems, fmt.Sprintf("%s.%s: got %d, want %d", enumName, name, members[i].Value, want))
+				problems = append(problems, fmt.Sprintf("%s.%s: missing", enum.name, name))
+			case enum.members[i].Value != want:
+				problems = append(problems, fmt.Sprintf("%s.%s: got %d, want %d", enum.name, name, enum.members[i].Value, want))
 			}
 		}
 	}
@@ -359,6 +382,7 @@ func validate(isa *ISA) error {
 
 	problems = append(problems, checkExamples(isa.Instructions)...)
 	problems = append(problems, checkOperandKinds(isa.Instructions)...)
+	problems = append(problems, checkDirections(isa.Instructions)...)
 	problems = append(problems, checkBasicEnums(isa.BasicEnums)...)
 
 	if len(problems) == 0 {
@@ -409,6 +433,64 @@ func checkOperandKinds(instructions []Instruction) []string {
 	return problems
 }
 
+// checkDirections holds the direction recovered from the chip's operation
+// classes against the shape of the operand list, which comes from the game's
+// help text and is a different reading of the same build.
+//
+// The compiler's register allocator used to derive direction from that shape
+// alone: the destination is the unnamed, register-only operand in first
+// position. Direction is data now, so the shape is free to serve as the check
+// on it. A build where the two disagree is either a machine that has genuinely
+// changed or an extraction that has misread one of them, and both want a human
+// before a compiler is built on the result.
+func checkDirections(instructions []Instruction) []string {
+	var problems []string
+	for _, instruction := range instructions {
+		declared := -1
+		for i, operand := range instruction.Operands {
+			switch operand.Direction {
+			case DirectionRead:
+				continue
+			case DirectionWrite, DirectionReadWrite:
+				if declared >= 0 {
+					problems = append(problems, fmt.Sprintf("instruction %s: operands %d and %d are both written",
+						instruction.Mnemonic, declared, i))
+				}
+				declared = i
+				continue
+			case DirectionUnknown:
+			}
+			// Undetermined and any other spelling both mean the table carries
+			// no direction here, which is the one thing it may not do.
+			problems = append(problems, fmt.Sprintf("instruction %s operand %d: direction %q says nothing",
+				instruction.Mnemonic, i, operand.Direction))
+		}
+		if positional := positionalWrite(instruction); positional != declared {
+			problems = append(problems, fmt.Sprintf("instruction %s: the operation writes operand %d, but the operand list puts a destination at %d",
+				instruction.Mnemonic, declared, positional))
+		}
+	}
+	return problems
+}
+
+// positionalWrite reports the operand the shape of an instruction's operand
+// list says is its destination, or -1 for none.
+//
+// A destination is spelled as a bare, unnamed r? in the game's own help text,
+// and it sits first. Every other register position is named -- a, b, address,
+// value, device -- and is read. The store forms put an unnamed r? last, which
+// is why the position matters and not just the shape.
+func positionalWrite(instruction Instruction) int {
+	if len(instruction.Operands) == 0 {
+		return -1
+	}
+	first := instruction.Operands[0]
+	if first.Name != "" || len(first.Kinds) != 1 || first.Kinds[0] != kindRegister {
+		return -1
+	}
+	return 0
+}
+
 // checkBasicEnums holds the BasicEnum tables to the manifest positionally,
 // since their order decides which table a shared member name resolves through.
 func checkBasicEnums(enums []BasicEnum) []string {
@@ -454,20 +536,30 @@ func countDeprecatedInstructions(instructions []Instruction) int {
 	return n
 }
 
-// writeISA renders the table as indented JSON with a trailing newline. HTML
-// escaping is disabled so operand spellings survive verbatim.
-func writeISA(isa *ISA, path string) error {
+// encodeJSON renders one of the canonical tables as indented JSON with a
+// trailing newline. HTML escaping is disabled so operand spellings survive
+// verbatim.
+func encodeJSON(table any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	if err := enc.Encode(isa); err != nil {
-		return fmt.Errorf("encode ISA: %w", err)
+	if err := enc.Encode(table); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// writeJSON writes an encoded table, creating its directory.
+func writeJSON(table any, path string) error {
+	data, err := encodeJSON(table)
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", path, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create output directory for %s: %w", path, err)
 	}
-	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil

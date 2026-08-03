@@ -22,15 +22,19 @@ const includeGuard = "IC10_PRELUDE_H"
 // here, so a reformat would only make the next regeneration undiffable.
 const clangFormatOff = "// clang-format off"
 
-// maxDevicePin is the highest pin a housing exposes, mirroring internal/sema's
-// own limit. isagen does not import sema: sema is built on the tables isagen
-// writes, and a broken table would then leave no working generator to fix it.
+// maxDevicePin is the highest pin a housing exposes. isagen does not import
+// sema, which owns the same limit: sema is built on the tables isagen writes,
+// and a broken table would then leave no working generator to fix it. The two
+// are held together by TestPreludeDeclaresThePinsMicroCResolves, which runs
+// analysis over a pin either side of the limit rather than reading the constant.
 const maxDevicePin = 5
 
 // machineConstantNames are the chip constants MicroC predeclares, in the order
-// the header writes them. It mirrors internal/sema's universe, including its
-// omission of nan, pinf and ninf, which the machine carries and MicroC does not
-// expose.
+// the header writes them. The machine carries nan, pinf and ninf as well, which
+// MicroC does not expose.
+//
+// TestPreludeDeclaresTheConstantsMicroCPredeclares holds this list to the names
+// analysis resolves, in both directions, for the reason above.
 var machineConstantNames = []string{"pi", "tau", "deg2rad", "rad2deg", "epsilon", "rgas"}
 
 // compileFlagsArgs is the argument file a C editor reads, one argument per
@@ -38,17 +42,14 @@ var machineConstantNames = []string{"pi", "tau", "deg2rad", "rad2deg", "epsilon"
 // -include and its argument are separate lines because a driver reads the file
 // as an argv rather than as a shell command line.
 //
-// -Wno-implicit-enum-enum-cast is what the per-family enums cost. clang warns
-// by default wherever a name is spelled in a family other than the one that
-// declared it, which the operand tables force: __ic_load_slot(g, 0, Pressure)
-// passes an ic10_logic where an ic10_slot is expected, and no ordering of the
-// families avoids that for every name. The alternative design is one enum of
-// every distinct name with four typedef aliases, which warns nowhere and costs
-// an editor its per-family completion.
+// No warning is suppressed. Every operand position takes an enumerator of its
+// own family's type, because a family that finds its name already declared
+// spells it with a prefix rather than giving it up, so nothing a MicroC program
+// can write reaches clang's implicit enumeration cast warning. That warning is
+// then a second reading of the rule the compiler enforces itself.
 var compileFlagsArgs = []string{
 	"-std=c23",
 	"-ffreestanding",
-	"-Wno-implicit-enum-enum-cast",
 	"-include",
 }
 
@@ -96,11 +97,6 @@ const logicDoc = `// Device properties: the logic type argument of the direct an
 `
 
 const slotDoc = `// Slot properties: the slot type argument of the slot forms.
-//
-// A name an earlier family already declared is omitted here, because C admits
-// one enumerator per name in a scope and the families give the shared names
-// different values. Spelling one where another family's type is expected still
-// compiles, since C converts between enumeration types.
 `
 
 const batchDoc = `// Aggregation modes: the last argument of the batch load forms.
@@ -167,6 +163,11 @@ type preludeEnum struct {
 	// tag names the enum and typedef the alias a signature is written with.
 	tag     string
 	typedef string
+	// prefix is what the family spells a member with where an earlier family
+	// has already taken the bare name. internal/ic10 exports the same four
+	// strings for the compiler to resolve an operand with, and its prelude test
+	// holds the two lists together.
+	prefix string
 	// kind is how a deprecation note names one of the members.
 	kind    string
 	doc     string
@@ -176,45 +177,75 @@ type preludeEnum struct {
 // preludeEnums lists the families in the order they claim names.
 func preludeEnums(isa *ISA) []preludeEnum {
 	return []preludeEnum{
-		{tag: "ic10_logic_e", typedef: "ic10_logic", kind: "logic type", doc: logicDoc, members: isa.LogicTypes},
-		{tag: "ic10_slot_e", typedef: "ic10_slot", kind: "slot type", doc: slotDoc, members: isa.SlotTypes},
-		{tag: "ic10_batch_e", typedef: "ic10_batch", kind: "batch mode", doc: batchDoc, members: isa.BatchModes},
-		{tag: "ic10_reagent_e", typedef: "ic10_reagent", kind: "reagent mode", doc: reagentDoc, members: isa.ReagentModes},
+		{tag: "ic10_logic_e", typedef: "ic10_logic", prefix: "LogicType_", kind: "logic type", doc: logicDoc, members: isa.LogicTypes},
+		{tag: "ic10_slot_e", typedef: "ic10_slot", prefix: "SlotType_", kind: "slot type", doc: slotDoc, members: isa.SlotTypes},
+		{tag: "ic10_batch_e", typedef: "ic10_batch", prefix: "BatchMode_", kind: "batch mode", doc: batchDoc, members: isa.BatchModes},
+		{tag: "ic10_reagent_e", typedef: "ic10_reagent", prefix: "ReagentMode_", kind: "reagent mode", doc: reagentDoc, members: isa.ReagentModes},
 	}
 }
 
-// writeOperandEnums declares the four families, giving each shared name to the
-// first family that carries it and leaving a note where one is skipped.
-func writeOperandEnums(b *strings.Builder, isa *ISA) error {
-	type claim struct {
-		typedef string
-		value   int64
+// operandsDoc introduces the families and the spelling rule they share. The
+// prefixes are read back out of the families rather than written here, so the
+// text cannot state a scheme the declarations do not follow.
+func operandsDoc(families []preludeEnum) string {
+	prefixes := make([]string, len(families))
+	for i, e := range families {
+		prefixes[i] = e.prefix
 	}
-	claimed := make(map[string]claim)
+	return `// The operand families, one per intrinsic parameter that names a machine
+// property. C admits one enumerator per name in a scope and the families share
+// several names, so a family that finds its name already declared spells it
+// with a prefix of its own rather than giving the name up, in the order they
+// appear below:
+//
+//   ` + strings.Join(prefixes, " ") + `
+//
+// MicroC resolves an operand name in that same single namespace: the bare
+// spelling means what the enumerator declaring it means, in every position, and
+// a position that had to prefix a name rejects the bare spelling there and
+// names the prefixed one. Every position therefore takes an enumerator of its
+// own family's type, which is what leaves nothing here for a C driver to
+// report as an implicit enumeration cast.
 
-	for _, e := range preludeEnums(isa) {
+`
+}
+
+// writeOperandEnums declares the families, giving each shared name to the first
+// family that carries it and prefixing it in every later one.
+func writeOperandEnums(b *strings.Builder, isa *ISA) error {
+	families := preludeEnums(isa)
+	b.WriteString(operandsDoc(families))
+
+	// claimed holds the family that took each bare name, and declared every
+	// enumerator written so far against the family that wrote it.
+	claimed := make(map[string]string)
+	declared := make(map[string]string)
+
+	for _, e := range families {
 		if len(e.members) == 0 {
 			return fmt.Errorf("the ISA table carries no %s members", e.typedef)
 		}
 		b.WriteString(e.doc)
 		fmt.Fprintf(b, "typedef enum %s {\n", e.tag)
-		declared := 0
 		for _, member := range e.members {
-			if prior, taken := claimed[member.Name]; taken {
-				fmt.Fprintf(b, "    // %s = %d omitted; %s declares it as %d.\n",
-					member.Name, member.Value, prior.typedef, prior.value)
-				continue
+			name := member.Name
+			switch owner, taken := claimed[member.Name]; {
+			case taken && owner == e.typedef:
+				return fmt.Errorf("%s carries %s twice, and the compiler resolves the first of them everywhere", e.typedef, member.Name)
+			case taken:
+				name = e.prefix + member.Name
+			default:
+				claimed[member.Name] = e.typedef
 			}
-			claimed[member.Name] = claim{typedef: e.typedef, value: member.Value}
-			fmt.Fprintf(b, "    %s", member.Name)
+			if owner, twice := declared[name]; twice {
+				return fmt.Errorf("%s declares the enumerator %s, which %s already declares, and C admits one per name in a scope", e.typedef, name, owner)
+			}
+			declared[name] = e.typedef
+			fmt.Fprintf(b, "    %s", name)
 			if member.Deprecated {
 				fmt.Fprintf(b, " [[deprecated(\"the game marks this %s retired\")]]", e.kind)
 			}
 			fmt.Fprintf(b, " = %d,\n", member.Value)
-			declared++
-		}
-		if declared == 0 {
-			return fmt.Errorf("every %s member is declared by an earlier family, and C has no empty enum", e.typedef)
 		}
 		fmt.Fprintf(b, "} %s;\n\n", e.typedef)
 	}

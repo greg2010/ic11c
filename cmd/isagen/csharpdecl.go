@@ -72,12 +72,12 @@ func splitDecls(body string) ([]csharpDecl, error) {
 		if headerEnd >= 0 {
 			header = body[start:headerEnd]
 		}
-		kind, name, err := classifyDecl(header)
+		head, err := classifyDecl(header)
 		if err != nil {
 			return err
 		}
-		decl := csharpDecl{kind: kind, name: name, text: text}
-		if kind == declContainer && bodyStart >= 0 {
+		decl := csharpDecl{kind: head.kind, name: head.name, text: text}
+		if head.kind == declContainer && bodyStart >= 0 {
 			decl.body = body[bodyStart:bodyEnd]
 		}
 		decls = append(decls, decl)
@@ -155,12 +155,21 @@ func isSpace(b byte) bool {
 	return b == ' ' || b == '\t' || b == '\r' || b == '\n'
 }
 
-// classifyDecl reads a declaration header and reports what the declaration is
-// and the path segment it contributes.
-func classifyDecl(header string) (declKind, string, error) {
+// declHead is what a declaration's header says about it: what the declaration
+// is, the path segment it contributes, and the C# keyword a type declaration is
+// introduced with. The keyword is empty for a leaf, and the four type keywords
+// do not agree on what they can be a base of.
+type declHead struct {
+	kind    declKind
+	name    string
+	keyword string
+}
+
+// classifyDecl reads a declaration header.
+func classifyDecl(header string) (declHead, error) {
 	stripped, err := stripAttributes(stripLeadingComments(header))
 	if err != nil {
-		return declLeaf, "", err
+		return declHead{}, err
 	}
 	for i := 0; i < len(stripped); i++ {
 		if j := skipLiteral(stripped, i); j != i {
@@ -184,15 +193,15 @@ func classifyDecl(header string) (declKind, string, error) {
 		}
 		name, ok := nextIdent(stripped, next)
 		if !ok {
-			return declLeaf, "", fmt.Errorf("type declaration %.60q names nothing", stripped)
+			return declHead{}, fmt.Errorf("type declaration %.60q names nothing", stripped)
 		}
-		return kind, name, nil
+		return declHead{kind: kind, name: name, keyword: word}, nil
 	}
 	name := normalizeHeader(stripped)
 	if name == "" {
-		return declLeaf, "", fmt.Errorf("declaration %.60q has no header", header)
+		return declHead{}, fmt.Errorf("declaration %.60q has no header", header)
 	}
-	return declLeaf, name, nil
+	return declHead{kind: declLeaf, name: name}, nil
 }
 
 // normalizeHeader reduces a declaration header, already stripped of its

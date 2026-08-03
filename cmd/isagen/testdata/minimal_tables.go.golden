@@ -20,7 +20,7 @@ const (
 // Instructions holds every mnemonic the chip's assembler accepts, indexed by
 // Opcode. Deprecated entries still assemble and run.
 var Instructions = []Instruction{
-	{Mnemonic: "move", Opcode: OpMove, Example: "move r? a(r?|num)", Operands: []Operand{{Kinds: []OperandKind{OperandRegister}}, {Name: "a", Kinds: []OperandKind{OperandRegister, OperandNumber}}}},
+	{Mnemonic: "move", Opcode: OpMove, Example: "move r? a(r?|num)", Operands: []Operand{{Kinds: []OperandKind{OperandRegister}, Direction: DirectionWrite}, {Name: "a", Kinds: []OperandKind{OperandRegister, OperandNumber}, Direction: DirectionRead}}},
 	{Mnemonic: "yield", Opcode: OpYield, Example: "yield", Operands: nil},
 }
 

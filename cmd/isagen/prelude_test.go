@@ -29,7 +29,8 @@ func TestRenderPreludeContents(t *testing.T) {
 		{name: "include guard", snippet: "#ifndef " + includeGuard},
 		{name: "highest pin", snippet: ", d" + string(rune('0'+maxDevicePin)) + " } dev;"},
 		{name: "deprecated attribute follows the name", snippet: `None [[deprecated("the game marks this logic type retired")]] = 0,`},
-		{name: "shared name goes to the first family", snippet: "// None = 0 omitted; ic10_logic declares it as 0."},
+		{name: "shared name goes to the first family", snippet: "\n    SlotType_None = 0,\n"},
+		{name: "the spelling rule names every prefix", snippet: "//   LogicType_ SlotType_ BatchMode_ ReagentMode_\n"},
 		{name: "constants are constexpr", snippet: "constexpr double epsilon = 5e-324;"},
 		{name: "device argument is typed", snippet: "double    __ic_load(dev d, ic10_logic t);"},
 		{name: "string operand is a pointer", snippet: "long long __ic_hash(const char *s);"},
@@ -107,13 +108,24 @@ func TestRenderPreludeErrors(t *testing.T) {
 			wantErr: "carries no ic10_reagent members",
 		},
 		{
-			name: "family wholly claimed by an earlier one",
+			name: "a family declaring one name twice",
 			isa: func() *ISA {
 				isa := full()
-				isa.BatchModes = []EnumMember{{Name: "None", Value: 7}}
+				isa.BatchModes = append(isa.BatchModes, isa.BatchModes[0])
 				return isa
 			},
-			wantErr: "every ic10_batch member is declared by an earlier family",
+			wantErr: "ic10_batch carries " + full().BatchModes[0].Name + " twice",
+		},
+		{
+			name: "a prefixed spelling a later member also carries",
+			isa: func() *ISA {
+				isa := full()
+				// None is the name the slot family gives up to the logic one, so
+				// the header spells its own under this one.
+				isa.SlotTypes = append(isa.SlotTypes, EnumMember{Name: "SlotType_None", Value: 99})
+				return isa
+			},
+			wantErr: "ic10_slot declares the enumerator SlotType_None, which ic10_slot already declares",
 		},
 	}
 	for _, tt := range tests {

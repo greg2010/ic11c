@@ -279,7 +279,7 @@ func TestRenderDigest(t *testing.T) {
 
 	var types []string
 	var records []string
-	for _, line := range strings.Split(got, "\n") {
+	for line := range strings.SplitSeq(got, "\n") {
 		switch {
 		case strings.HasPrefix(line, "type "):
 			types = append(types, strings.Fields(line)[2])

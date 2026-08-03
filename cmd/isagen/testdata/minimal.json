@@ -11,14 +11,16 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "a",
           "kinds": [
             "register",
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },

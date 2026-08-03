@@ -4,5 +4,6 @@ public enum ScriptCommand
 {
 	move,
 	l,
+	swap,
 	hcf
 }

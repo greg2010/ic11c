@@ -1,0 +1,47 @@
+{
+  "assembly_version": "0.2.6403.27689",
+  "prefabs": [
+    {
+      "name": "StructureSensor",
+      "hash": 1812372242,
+      "script": "Assets.Scripts.Objects.Pipes.Sensor",
+      "state": {"HasErrorState": false, "HasPowerState": true, "HasActivateState": false, "HasLockState": false, "HasOnOffState": true, "HasModeState": false, "HasOpenState": false, "HasImportState": false, "HasExportState": false, "HasColorState": false, "HasAccessState": false},
+      "used_power": 10
+    },
+    {
+      "name": "StructureHousing",
+      "hash": -1014431605,
+      "script": "Assets.Scripts.Objects.Electrical.Housing",
+      "state": {"HasErrorState": true, "HasPowerState": true, "HasActivateState": false, "HasLockState": false, "HasOnOffState": true, "HasModeState": true, "HasOpenState": false, "HasImportState": false, "HasExportState": false, "HasColorState": false, "HasAccessState": false},
+      "used_power": 50,
+      "slots": [{"index": 0, "class": 1}, {"index": 1, "class": 2}]
+    },
+    {
+      "name": "StructurePanel",
+      "hash": 1110935274,
+      "script": "Objects.Structures.Panel",
+      "state": {"HasErrorState": false, "HasPowerState": false, "HasActivateState": false, "HasLockState": false, "HasOnOffState": true, "HasModeState": true, "HasOpenState": true, "HasImportState": false, "HasExportState": false, "HasColorState": false, "HasAccessState": false},
+      "used_power": 0
+    },
+    {
+      "name": "StructureLouvre",
+      "hash": 693815379,
+      "script": "Objects.Structures.Louvre",
+      "state": {"HasErrorState": false, "HasPowerState": true, "HasActivateState": false, "HasLockState": false, "HasOnOffState": true, "HasModeState": true, "HasOpenState": true, "HasImportState": false, "HasExportState": false, "HasColorState": false, "HasAccessState": false},
+      "used_power": 10
+    },
+    {
+      "name": "StructureMirror",
+      "hash": -1960339480,
+      "script": "Assets.Scripts.Objects.Electrical.Mirror",
+      "state": {"HasErrorState": false, "HasPowerState": true, "HasActivateState": false, "HasLockState": false, "HasOnOffState": true, "HasModeState": false, "HasOpenState": false, "HasImportState": false, "HasExportState": false, "HasColorState": false, "HasAccessState": false},
+      "used_power": 10
+    },
+    {
+      "name": "ItemWrench",
+      "hash": -1886261558,
+      "script": "Assets.Scripts.Objects.Thing",
+      "state": {"HasErrorState": false, "HasPowerState": false, "HasActivateState": false, "HasLockState": false, "HasOnOffState": false, "HasModeState": false, "HasOpenState": false, "HasImportState": false, "HasExportState": false, "HasColorState": false, "HasAccessState": false}
+    }
+  ]
+}

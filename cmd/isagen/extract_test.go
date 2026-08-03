@@ -18,7 +18,7 @@ const fixtureManifest = "2546537964923579038"
 // validISA returns tables that satisfy every assertion in validate, so a test
 // can perturb one field at a time.
 func validISA() *ISA {
-	isa := &ISA{Manifest: fixtureManifest, Version: "0.2.6403.27689"}
+	isa := &ISA{Manifest: fixtureManifest, Version: fixtureVersion}
 	for i := range wantInstructions {
 		isa.Instructions = append(isa.Instructions, Instruction{Mnemonic: "i" + strconv.Itoa(i), Opcode: i})
 	}
@@ -27,9 +27,12 @@ func validISA() *ISA {
 		isa.Instructions[i].Example = wantExamples[mnemonic]
 	}
 	// One instruction accepting every operand kind is all the reachability
-	// check asks for.
+	// check asks for. It is the last rather than the first, so that the kinds
+	// it lists cannot collide with the destination shape a manifest
+	// instruction's signature implies.
 	for _, kind := range slices.Sorted(maps.Values(helpTokenKinds)) {
-		isa.Instructions[0].Operands = append(isa.Instructions[0].Operands, Operand{Kinds: []string{kind}})
+		everyKind := &isa.Instructions[len(isa.Instructions)-1]
+		everyKind.Operands = append(everyKind.Operands, Operand{Kinds: []string{kind}, Direction: DirectionRead})
 	}
 	for i := range wantDeprecatedCommands {
 		isa.Instructions[i].Deprecated = true
@@ -138,8 +141,41 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name:    "operand kind unreachable",
-			perturb: func(i *ISA) { i.Instructions[0].Operands = nil },
+			perturb: func(i *ISA) { i.Instructions[len(i.Instructions)-1].Operands = nil },
 			wantErr: "operand kind register: no instruction accepts one",
+		},
+		{
+			name: "operand direction undetermined",
+			perturb: func(i *ISA) {
+				i.Instructions[len(i.Instructions)-1].Operands[0].Direction = DirectionUnknown
+			},
+			wantErr: `operand 0: direction "unknown" says nothing`,
+		},
+		{
+			name: "a write the operand list does not put first",
+			perturb: func(i *ISA) {
+				i.Instructions[len(i.Instructions)-1].Operands[1].Direction = DirectionWrite
+			},
+			wantErr: "the operation writes operand 1, but the operand list puts a destination at -1",
+		},
+		{
+			name: "a destination the operation does not write",
+			perturb: func(i *ISA) {
+				last := &i.Instructions[len(i.Instructions)-1]
+				last.Operands = []Operand{{Kinds: []string{kindRegister}, Direction: DirectionRead}}
+			},
+			wantErr: "the operation writes operand -1, but the operand list puts a destination at 0",
+		},
+		{
+			name: "two written operands",
+			perturb: func(i *ISA) {
+				last := &i.Instructions[len(i.Instructions)-1]
+				last.Operands = []Operand{
+					{Kinds: []string{kindRegister}, Direction: DirectionWrite},
+					{Kinds: []string{kindRegister}, Direction: DirectionWrite},
+				}
+			},
+			wantErr: "operands 0 and 1 are both written",
 		},
 		{
 			name:    "basic enum table short",
@@ -218,11 +254,11 @@ func TestValidateReportsBothHalvesOfABasicEnum(t *testing.T) {
 	}
 }
 
-func TestWriteISA(t *testing.T) {
+func TestWriteJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "isa.json")
 	isa := readFixture(t, "minimal.json")
-	if err := writeISA(isa, path); err != nil {
-		t.Fatalf("writeISA: %v", err)
+	if err := writeJSON(isa, path); err != nil {
+		t.Fatalf("writeJSON: %v", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -240,8 +276,8 @@ func TestWriteISA(t *testing.T) {
 		t.Fatalf("re-decode written file: %v", err)
 	}
 	second := filepath.Join(t.TempDir(), "isa.json")
-	if err := writeISA(&round, second); err != nil {
-		t.Fatalf("writeISA on the re-decoded value: %v", err)
+	if err := writeJSON(&round, second); err != nil {
+		t.Fatalf("writeJSON on the re-decoded value: %v", err)
 	}
 	again, err := os.ReadFile(second)
 	if err != nil {
@@ -260,14 +296,18 @@ func TestExtractISA(t *testing.T) {
 
 	want := []Instruction{
 		{Mnemonic: "move", Opcode: 0, Example: "move r? a(r?|num)", Operands: []Operand{
-			{Kinds: []string{kindRegister}},
-			{Name: "a", Kinds: []string{kindRegister, kindNumber}},
+			{Kinds: []string{kindRegister}, Direction: DirectionWrite},
+			{Name: "a", Kinds: []string{kindRegister, kindNumber}, Direction: DirectionRead},
 		}},
 		{Mnemonic: "l", Opcode: 1, Example: "l r? logicType", Operands: []Operand{
-			{Kinds: []string{kindRegister}},
-			{Kinds: []string{kindLogicType}},
+			{Kinds: []string{kindRegister}, Direction: DirectionWrite},
+			{Kinds: []string{kindLogicType}, Direction: DirectionRead},
 		}},
-		{Mnemonic: "hcf", Opcode: 2, Deprecated: true, Example: "hcf"},
+		{Mnemonic: "swap", Opcode: 2, Example: "swap a(r?|num) r?", Operands: []Operand{
+			{Name: "a", Kinds: []string{kindRegister, kindNumber}, Direction: DirectionRead},
+			{Kinds: []string{kindRegister}, Direction: DirectionWrite},
+		}},
+		{Mnemonic: "hcf", Opcode: 3, Deprecated: true, Example: "hcf"},
 	}
 	if !slices.EqualFunc(isa.Instructions, want, sameInstruction) {
 		t.Errorf("instructions = %+v, want %+v", isa.Instructions, want)
@@ -343,7 +383,61 @@ func sameInstruction(a, b Instruction) bool {
 }
 
 func sameOperand(a, b Operand) bool {
-	return a.Name == b.Name && slices.Equal(a.Kinds, b.Kinds)
+	return a.Name == b.Name && slices.Equal(a.Kinds, b.Kinds) && a.Direction == b.Direction
+}
+
+// TestExtractedDirectionBeatsTheOperandShape is the reason direction is
+// extracted at all.
+//
+// The fixture's swap writes its second operand and spells the first the way
+// every read operand is spelled. positionalWrite is the rule register
+// allocation used before this: the destination is the unnamed, register-only
+// operand in first position. On swap it answers that nothing is written, which
+// would leave allocation believing a register it has just overwritten still
+// holds the value someone downstream reads. What the operation class says is
+// carried instead, and it says operand 1.
+func TestExtractedDirectionBeatsTheOperandShape(t *testing.T) {
+	isa := extractFixture(t)
+	i := slices.IndexFunc(isa.Instructions, func(instruction Instruction) bool { return instruction.Mnemonic == "swap" })
+	if i < 0 {
+		t.Fatal("the fixture declares no swap, which is what carries a write outside first position")
+	}
+	swap := isa.Instructions[i]
+
+	if got := positionalWrite(swap); got != -1 {
+		t.Errorf("positionalWrite(swap) = %d, want -1; the shape of %q says nothing is written", got, swap.Example)
+	}
+	want := []Direction{DirectionRead, DirectionWrite}
+	got := make([]Direction, len(swap.Operands))
+	for j, operand := range swap.Operands {
+		got[j] = operand.Direction
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("swap directions = %v, want %v", got, want)
+	}
+
+	if problems := checkDirections([]Instruction{swap}); len(problems) == 0 {
+		t.Error("checkDirections accepted a write the operand list does not put first; a build introducing one must stop extraction")
+	}
+}
+
+// TestCheckDirectionsAcceptsAFoldedDestination covers the direction ins carries.
+// A destination the instruction reads before assigning is still the destination
+// the operand list puts first, so the two readings agree and extraction has
+// nothing to report. Read as saying nothing instead, it would stop every
+// extraction of a build that ships one.
+func TestCheckDirectionsAcceptsAFoldedDestination(t *testing.T) {
+	folded := Instruction{
+		Mnemonic: "ins",
+		Example:  "ins r? a(r?|num) b(r?|num) c(r?|num)",
+		Operands: []Operand{
+			{Kinds: []string{kindRegister}, Direction: DirectionReadWrite},
+			{Name: "a", Kinds: []string{kindRegister, kindNumber}, Direction: DirectionRead},
+		},
+	}
+	if problems := checkDirections([]Instruction{folded}); len(problems) != 0 {
+		t.Errorf("checkDirections reported %v for a destination the instruction folds into", problems)
+	}
 }
 
 func sameBasicEnum(a, b BasicEnum) bool {

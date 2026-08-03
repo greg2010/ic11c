@@ -434,6 +434,99 @@ func TestExamplesMatchOperands(t *testing.T) {
 	}
 }
 
+// TestWriteIndex covers what the table can say about direction, including the
+// two things this build's table happens not to contain.
+//
+// The unnamed, register-only first operand used to be how the compiler decided
+// what an instruction writes. The third and fourth cases are what that rule
+// gets wrong: a write outside first position reads as no write at all, and an
+// operand the extraction could not read reads as a plain source. Both leave
+// allocation confident about a register whose value is gone, which is the one
+// failure this machine gives no diagnostic for.
+func TestWriteIndex(t *testing.T) {
+	register := []OperandKind{OperandRegister}
+	tests := []struct {
+		name        string
+		instruction Instruction
+		want        int
+		wantErr     string
+	}{
+		{
+			name:        "no operands",
+			instruction: Instruction{Mnemonic: "yield"},
+			want:        -1,
+		},
+		{
+			name: "a write in first position",
+			instruction: Instruction{Mnemonic: "move", Operands: []Operand{
+				{Kinds: register, Direction: DirectionWrite},
+				{Name: "a", Kinds: register, Direction: DirectionRead},
+			}},
+			want: 0,
+		},
+		{
+			name: "a register the instruction only reads",
+			instruction: Instruction{Mnemonic: "s", Operands: []Operand{
+				{Name: "device", Kinds: register, Direction: DirectionRead},
+				{Kinds: register, Direction: DirectionRead},
+			}},
+			want: -1,
+		},
+		{
+			name: "a write outside first position",
+			instruction: Instruction{Mnemonic: "swap", Operands: []Operand{
+				{Name: "a", Kinds: register, Direction: DirectionRead},
+				{Kinds: register, Direction: DirectionWrite},
+			}},
+			want: 1,
+		},
+		{
+			name: "an operand the extraction could not read",
+			instruction: Instruction{Mnemonic: "swap", Operands: []Operand{
+				{Kinds: register, Direction: DirectionWrite},
+				{Name: "a", Kinds: register},
+			}},
+			wantErr: "swap operand 1 has direction unknown",
+		},
+		{
+			name: "two written operands",
+			instruction: Instruction{Mnemonic: "divmod", Operands: []Operand{
+				{Kinds: register, Direction: DirectionWrite},
+				{Kinds: register, Direction: DirectionWrite},
+			}},
+			wantErr: "divmod writes operands 0 and 1",
+		},
+		{
+			name: "an operand the instruction reads before writing",
+			instruction: Instruction{Mnemonic: "ins", Operands: []Operand{
+				{Kinds: register, Direction: DirectionReadWrite},
+				{Name: "a", Kinds: register, Direction: DirectionRead},
+			}},
+			wantErr: "ins reads and writes operand 0",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.instruction.WriteIndex()
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("WriteIndex() = %d, want an error containing %q", got, tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("WriteIndex() error = %q, want it to contain %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("WriteIndex(): %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("WriteIndex() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildStamp(t *testing.T) {
 	if ManifestID == "" {
 		t.Error("ManifestID is empty")

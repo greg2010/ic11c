@@ -11,7 +11,8 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "device",
@@ -19,12 +20,14 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logictype"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -37,32 +40,38 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "kinds": [
             "devicehash"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "namehash"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "slotindex"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "logicslottype"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "batchmode"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -75,7 +84,8 @@
         {
           "kinds": [
             "register"
-          ]
+          ],
+          "direction": "write"
         },
         {
           "name": "device",
@@ -83,17 +93,20 @@
             "device",
             "register",
             "refid"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "reagentmode"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "integer"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -106,12 +119,14 @@
         {
           "kinds": [
             "string"
-          ]
+          ],
+          "direction": "read"
         },
         {
           "kinds": [
             "number"
-          ]
+          ],
+          "direction": "read"
         }
       ]
     },
@@ -121,6 +136,28 @@
       "deprecated": false,
       "example": "hcf",
       "operands": null
+    },
+    {
+      "mnemonic": "ins",
+      "opcode": 5,
+      "deprecated": false,
+      "example": "ins r? a(r?|num) b(r?|num) c(r?|num)",
+      "operands": [
+        {
+          "kinds": [
+            "register"
+          ],
+          "direction": "readwrite"
+        },
+        {
+          "name": "a",
+          "kinds": [
+            "register",
+            "number"
+          ],
+          "direction": "read"
+        }
+      ]
     }
   ],
   "logic_types": [

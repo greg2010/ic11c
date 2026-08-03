@@ -20,16 +20,18 @@ const (
 	OpLr     Opcode = 2
 	OpDefine Opcode = 3
 	OpHcf    Opcode = 4
+	OpIns    Opcode = 5
 )
 
 // Instructions holds every mnemonic the chip's assembler accepts, indexed by
 // Opcode. Deprecated entries still assemble and run.
 var Instructions = []Instruction{
-	{Mnemonic: "l", Opcode: OpL, Example: "l r? device(d?|r?|id) logicType", Operands: []Operand{{Kinds: []OperandKind{OperandRegister}}, {Name: "device", Kinds: []OperandKind{OperandDevice, OperandRegister, OperandRefID}}, {Kinds: []OperandKind{OperandLogicType}}}},
-	{Mnemonic: "lbns", Opcode: OpLbns, Example: "lbns r? deviceHash nameHash slotIndex logicSlotType batchMode", Operands: []Operand{{Kinds: []OperandKind{OperandRegister}}, {Kinds: []OperandKind{OperandDeviceHash}}, {Kinds: []OperandKind{OperandNameHash}}, {Kinds: []OperandKind{OperandSlotIndex}}, {Kinds: []OperandKind{OperandLogicSlotType}}, {Kinds: []OperandKind{OperandBatchMode}}}},
-	{Mnemonic: "lr", Opcode: OpLr, Example: "lr r? device(d?|r?|id) reagentMode int", Operands: []Operand{{Kinds: []OperandKind{OperandRegister}}, {Name: "device", Kinds: []OperandKind{OperandDevice, OperandRegister, OperandRefID}}, {Kinds: []OperandKind{OperandReagentMode}}, {Kinds: []OperandKind{OperandInteger}}}},
-	{Mnemonic: "define", Opcode: OpDefine, Deprecated: true, Example: "define str num", Operands: []Operand{{Kinds: []OperandKind{OperandString}}, {Kinds: []OperandKind{OperandNumber}}}},
+	{Mnemonic: "l", Opcode: OpL, Example: "l r? device(d?|r?|id) logicType", Operands: []Operand{{Kinds: []OperandKind{OperandRegister}, Direction: DirectionWrite}, {Name: "device", Kinds: []OperandKind{OperandDevice, OperandRegister, OperandRefID}, Direction: DirectionRead}, {Kinds: []OperandKind{OperandLogicType}, Direction: DirectionRead}}},
+	{Mnemonic: "lbns", Opcode: OpLbns, Example: "lbns r? deviceHash nameHash slotIndex logicSlotType batchMode", Operands: []Operand{{Kinds: []OperandKind{OperandRegister}, Direction: DirectionWrite}, {Kinds: []OperandKind{OperandDeviceHash}, Direction: DirectionRead}, {Kinds: []OperandKind{OperandNameHash}, Direction: DirectionRead}, {Kinds: []OperandKind{OperandSlotIndex}, Direction: DirectionRead}, {Kinds: []OperandKind{OperandLogicSlotType}, Direction: DirectionRead}, {Kinds: []OperandKind{OperandBatchMode}, Direction: DirectionRead}}},
+	{Mnemonic: "lr", Opcode: OpLr, Example: "lr r? device(d?|r?|id) reagentMode int", Operands: []Operand{{Kinds: []OperandKind{OperandRegister}, Direction: DirectionWrite}, {Name: "device", Kinds: []OperandKind{OperandDevice, OperandRegister, OperandRefID}, Direction: DirectionRead}, {Kinds: []OperandKind{OperandReagentMode}, Direction: DirectionRead}, {Kinds: []OperandKind{OperandInteger}, Direction: DirectionRead}}},
+	{Mnemonic: "define", Opcode: OpDefine, Deprecated: true, Example: "define str num", Operands: []Operand{{Kinds: []OperandKind{OperandString}, Direction: DirectionRead}, {Kinds: []OperandKind{OperandNumber}, Direction: DirectionRead}}},
 	{Mnemonic: "hcf", Opcode: OpHcf, Example: "hcf", Operands: nil},
+	{Mnemonic: "ins", Opcode: OpIns, Example: "ins r? a(r?|num) b(r?|num) c(r?|num)", Operands: []Operand{{Kinds: []OperandKind{OperandRegister}, Direction: DirectionReadWrite}, {Name: "a", Kinds: []OperandKind{OperandRegister, OperandNumber}, Direction: DirectionRead}}},
 }
 
 // LogicTypes holds the device properties addressable by l, s, and the batch
