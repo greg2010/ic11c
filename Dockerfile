@@ -161,11 +161,12 @@ COPY --from=build-windows /out/ic11c_Windows_x86_64.zip /
 # dedicated server rather than the client: app 600760 carries Valve's
 # free-to-download flag, so an anonymous login reaches it and no account or
 # licence is involved, and it ships the same definitions the client does.
-FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/sdk:9.0@sha256:cb9d975bf57fd1b0915858d1db1184bea20f7f746f0536323fcab49673144e8c AS isa-tools
+FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/sdk:10.0@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0 AS isa-tools
 
 ARG DEPOTDOWNLOADER_VERSION=3.4.0
 ARG DEPOTDOWNLOADER_SHA256=7419f65efb7eb16b6e56987ed1b76475f29c02475c0016166c84798388e796bc
-# 9.x and 10.x fail on this SDK image, and 8.2 targets an older runtime, so it
+# Held here rather than current because the decompile it writes is what the
+# checked-in tables were extracted from. 8.2 targets an older runtime, so it
 # needs the roll-forward below to start at all. A nuget.org version is immutable,
 # so unlike the two downloads it needs no digest beside it.
 ARG ILSPYCMD_VERSION=8.2.0.7535
