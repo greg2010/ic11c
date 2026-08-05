@@ -79,9 +79,15 @@ jobs:
 
       - run: task lint
 
-      # The C conformance gate inside `task test` runs every driver on PATH.
+      # The C conformance gate inside `task test` runs every driver on PATH, and
+      # gcc first accepted -std=c23 in 14. The last line asserts the swap took:
+      # otherwise it surfaces as the gate failing on every program in the corpus.
       - name: Install a C23-capable gcc
-        run: scripts/setup-c23-gcc.sh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-14
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          gcc -std=c23 -E -x c /dev/null >/dev/null
 
       # Cuts the chip out of the decompiled tree and runs the suite against it,
       # so compiled programs execute on the game's own machine. Nothing is
