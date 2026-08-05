@@ -33,6 +33,7 @@ unscanned=(
 	.gitignore
 	.golangci.yml
 	.llvm-version
+	README.md
 	cmd
 	go.mod
 	go.sum
