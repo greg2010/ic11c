@@ -6,11 +6,9 @@ import (
 	"github.com/greg2010/ic11c/internal/mir"
 )
 
-// Program points. Each instruction owns two: an even point at which it reads
-// its operands and an odd point at which it writes its result. Separating them
-// lets a result take the register of an operand that dies at the same
-// instruction, which matters on a sixteen register file and costs nothing but
-// a doubled index.
+// Program points. Each instruction owns two: an even point where it reads its
+// operands and an odd point where it writes its result. Separating them lets a
+// result take the register of an operand that dies in the same instruction.
 func usePoint(index int) int { return 2 * index }
 func defPoint(index int) int { return 2*index + 1 }
 
@@ -21,13 +19,9 @@ type liveRange struct {
 }
 
 // interval is the set of points at which a virtual register holds a value that
-// is still wanted.
-//
-// It is a list of ranges rather than a single span. A value live in two blocks
-// that layout order separates has a hole between them, and filling that hole
-// would make it interfere with everything defined in between. On sixteen
-// registers those false interferences turn into spills, and a spill costs two
-// instructions and their operand text every time the value is touched.
+// is still wanted, kept as a list of ranges rather than a single span: filling
+// the hole between two live blocks would make the value interfere with
+// everything defined between them, which spills it needlessly.
 type interval struct {
 	vreg mir.VirtReg
 	// ranges is sorted by from, disjoint, and never adjacent: construction
@@ -39,8 +33,14 @@ type interval struct {
 	touches int
 }
 
+// start and end are the first and last points of the interval, which
+// [buildIntervals] guarantees covers at least one point. An empty interval
+// reaching [spillScore] would divide zero touches by a zero span, and the
+// resulting NaN wins every comparison, taking a register off a live value
+// silently.
 func (iv *interval) start() int { return iv.ranges[0].from }
-func (iv *interval) end() int   { return iv.ranges[len(iv.ranges)-1].to }
+
+func (iv *interval) end() int { return iv.ranges[len(iv.ranges)-1].to }
 
 // span is the number of points at which the interval is live, excluding its
 // holes. It is what a register gains by not holding this value.
@@ -96,10 +96,11 @@ func (iv *interval) addRange(from, to int) {
 	iv.ranges = slices.Insert(iv.ranges, 0, liveRange{from: from, to: to})
 }
 
-// byStart orders intervals by their first live point, which is the order linear
-// scan considers them in and the order spill slots are handed out in. The
-// virtual register breaks ties, so two intervals starting together keep a fixed
-// order and the emitted program does not depend on map iteration.
+// byStart orders intervals by their first live point, which is the order
+// linear scan considers them in and the order spill slots are handed out in.
+// The virtual register ID breaks ties and is a total order: intervals arrive
+// from a map traversal, and slices.SortFunc is unstable, so without a
+// tiebreaker map order would decide the emitted program.
 func byStart(a, b *interval) int {
 	if n := a.start() - b.start(); n != 0 {
 		return n
@@ -109,11 +110,8 @@ func byStart(a, b *interval) int {
 
 // setFrom shortens the first range to start at point, which is what a
 // definition does to a value the block had assumed live from its start. A
-// definition nothing reads has no range yet and gets one covering only itself.
+// definition nothing reads is given its own range by [buildIntervals] instead,
+// so there is always a range to shorten here.
 func (iv *interval) setFrom(point int) {
-	if len(iv.ranges) == 0 {
-		iv.addRange(point, point+1)
-		return
-	}
 	iv.ranges[0].from = point
 }

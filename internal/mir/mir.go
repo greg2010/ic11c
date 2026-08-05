@@ -1,22 +1,13 @@
 // Package mir is the machine level intermediate representation: IC10 opcodes
 // carrying virtual or physical registers, arranged as functions of basic
-// blocks.
-//
-// Instruction selection produces it with virtual registers, register
+// blocks. Instruction selection produces it with virtual registers, register
 // allocation rewrites those into physical ones, and internal/emit turns the
 // result into assembly text.
 //
 // Construction refuses anything the emitter could not turn into a working
-// line: an unknown opcode, one the target documents as unemittable, the wrong
-// operand count, or an operand of a kind the position does not accept. The
-// chip validates almost nothing at compile time, so an instruction that is
-// wrong here faults once per tick forever with no diagnostic beyond a line
-// number. Rejecting at the construction site names the selection pattern that
-// produced it, which is the information needed to fix it.
-//
-// One hazard is not a property of an instruction but of the line it lands on,
-// which construction cannot see. [Program.CheckPlacement] checks those against
-// a layout that is final.
+// line, since the chip validates almost nothing at compile time and a bad
+// instruction faults once per tick forever with no diagnostic beyond a line
+// number.
 package mir
 
 import (
@@ -27,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/greg2010/ic11c/internal/ic10"
+	"github.com/greg2010/ic11c/internal/isa"
 	"github.com/greg2010/ic11c/internal/source"
 )
 
@@ -40,22 +32,27 @@ var (
 	ErrOperandKind   = errors.New("operand kind not accepted in this position")
 )
 
-// pseudoOps are assembler directives rather than instructions. They are absent
-// from ic10's unemittable table because they compile and run correctly; they
-// are refused here because each consumes bytes and an execution slot against
-// the 4096 byte budget while computing nothing, which docs/target.md lists
-// alongside comments and blank lines under instructions not to emit.
+// InvariantError reports machine IR that breaks an invariant a later stage
+// rests on. It renders every diagnostic it was built from, not the first and a
+// count, but does not unwrap to them, since those name block labels and operand
+// kinds the source never wrote — %w would print a defect as if it were a line.
+type InvariantError struct{ diags source.DiagnosticList }
+
+func (e *InvariantError) Error() string { return e.diags.String() }
+
+// pseudoOps are assembler directives rather than instructions: absent from
+// ic10's unemittable table because they compile and run correctly, but
+// refused here because each consumes bytes and an execution slot against the
+// 4096 byte budget while computing nothing.
 var pseudoOps = map[ic10.Opcode]string{
-	ic10.OpAlias:  "an assembler directive that costs bytes and an execution slot; emit the register or device directly",
-	ic10.OpDefine: "an assembler directive that costs bytes and an execution slot; emit the literal directly",
-	ic10.OpLabel:  "names a device in the game UI and computes nothing",
+	isa.OpAlias:  "an assembler directive that costs bytes and an execution slot; emit the register or device directly",
+	isa.OpDefine: "an assembler directive that costs bytes and an execution slot; emit the literal directly",
+	isa.OpLabel:  "names a device in the game UI and computes nothing",
 }
 
-// Instr is one machine instruction and one emitted line.
-//
-// Args is public and mutable so register allocation can rewrite virtual
-// register operands in place. Everything else about an instruction is fixed at
-// construction.
+// Instr is one machine instruction and one emitted line. Args is public and
+// mutable so register allocation can rewrite virtual register operands in
+// place; everything else is fixed at construction.
 type Instr struct {
 	Op   ic10.Opcode
 	Args []Operand
@@ -140,9 +137,12 @@ type Block struct {
 	Pos   source.Position
 	// Instrs is the instruction sequence in emission order.
 	Instrs []*Instr
-	// Succs lists the blocks control can reach from here. It is set by whoever
-	// builds the block rather than derived from the terminator, so that a
-	// liveness pass does not have to interpret opcodes.
+	// Succs lists every block control can reach from here, the fallthrough into
+	// the next laid-out block included. It is set by whoever builds the block
+	// rather than derived from the terminator, so liveness does not have to
+	// interpret opcodes. An edge left out is a miscompile: liveness reads
+	// nothing else, so the omitted edge's interval ends early and the allocator
+	// gives the register away.
 	Succs []*Block
 }
 
@@ -170,20 +170,14 @@ const (
 	RegFormMixed
 )
 
-func (f RegForm) String() string {
-	switch f {
-	case RegFormEmpty:
-		return "empty"
-	case RegFormVirtual:
-		return "virtual"
-	case RegFormPhysical:
-		return "physical"
-	case RegFormMixed:
-		return "mixed"
-	default:
-		return "RegForm(" + fmt.Sprint(uint8(f)) + ")"
-	}
+var regFormNames = [...]string{
+	RegFormEmpty:    "empty",
+	RegFormVirtual:  "virtual",
+	RegFormPhysical: "physical",
+	RegFormMixed:    "mixed",
 }
+
+func (f RegForm) String() string { return source.EnumName(regFormNames[:], int(f), "RegForm") }
 
 // Func is a unit of emission and the unit byte accounting attributes to.
 type Func struct {
@@ -237,6 +231,9 @@ func (f *Func) AllInstrs() iter.Seq2[*Block, *Instr] {
 func (f *Func) RegForm() RegForm {
 	var virtual, physical bool
 	for _, instr := range f.AllInstrs() {
+		if instr == nil {
+			continue
+		}
 		for _, arg := range instr.Args {
 			switch arg.(type) {
 			case VirtReg:
@@ -267,22 +264,20 @@ type Program struct {
 }
 
 // Validate checks the structural invariants emission depends on and reports
-// every violation rather than the first, so one pass over a broken program
-// names all of its problems.
+// every violation rather than the first.
 //
-// It re-checks the arity and the operand kinds [NewInstr] already refused.
-// Instr.Args is public so that register allocation can rewrite operands in
-// place, and a rewrite that puts the wrong kind in a position passes
-// construction because construction ran before it. That window is the reason
-// this is not redundant.
-//
-// It does not resolve branch targets. A Label naming no block is reported by
-// the emitter, which is the stage that knows every label in scope.
+// It re-checks everything [NewInstr] already refused, since later passes
+// rewrite Instr.Op and Instr.Args in place and can land a wrong opcode or
+// operand kind that construction never sees again. It does not resolve branch
+// targets — a Label naming no block is the emitter's to report — but does hold
+// [Block.Succs] against a function's branches and layout while the function
+// still carries virtual registers, since liveness is Succs' only reader and
+// runs once.
 func (p *Program) Validate() error {
 	var diags source.DiagnosticList
 	if p == nil || len(p.Funcs) == 0 {
 		diags.Addf(source.Position{}, "program has no functions")
-		return diags.Err()
+		return invariant(diags)
 	}
 	labels := make(map[string]*Func)
 	for _, fn := range p.Funcs {
@@ -297,39 +292,49 @@ func (p *Program) Validate() error {
 			diags.Addf(fn.Pos, "function %s has no blocks", fn.Name)
 		}
 		owned := make(map[*Block]bool, len(fn.Blocks))
+		byLabel := make(map[string]*Block, len(fn.Blocks))
 		for _, block := range fn.Blocks {
-			if block != nil {
-				owned[block] = true
+			if block == nil {
+				continue
+			}
+			owned[block] = true
+			if _, taken := byLabel[block.Label]; !taken {
+				byLabel[block.Label] = block
 			}
 		}
-		for _, block := range fn.Blocks {
+		// Liveness runs once, over the virtual form, and reads Succs alone. A
+		// function whose registers are all physical is past that and past any
+		// use for the graph.
+		form := fn.RegForm()
+		checkEdges := form == RegFormVirtual || form == RegFormMixed
+		for i, block := range fn.Blocks {
 			if block == nil {
 				diags.Addf(fn.Pos, "function %s contains a nil block", fn.Name)
 				continue
 			}
-			validateBlock(&diags, fn, block, labels, owned)
+			validateBlock(&diags, fn, block, labels)
+			validateSuccs(&diags, fn, i, byLabel, owned, checkEdges)
 		}
 	}
-	return diags.Err()
+	return invariant(diags)
+}
+
+// invariant answers nil for a list holding nothing that rejects, so that a
+// caller's err != nil is not satisfied by an interface holding a typed nil.
+func invariant(diags source.DiagnosticList) error {
+	if !diags.HasErrors() {
+		return nil
+	}
+	return &InvariantError{diags: diags}
 }
 
 // CheckPlacement reports every instruction whose hazard is where it lands
-// rather than what it is.
-//
-// One line carries one. The chip starts at line 0, emission lays functions out
-// in program order and gives each instruction exactly one line, so line 0 holds
-// the program's first instruction — the first instruction of the first
-// non-empty block of the first function that has one — and can hold nothing
-// else. The entry prologue does not change that rule and cannot be relied on to
-// satisfy it: a program that allocates in the data region leads with clr db and
-// one that selected a real call leads with the sp initialization, but a program
-// that does neither gets no prologue at all and its own first instruction is
-// line 0. The condition is therefore stated over the emitted sequence and not
-// over the entry function's body.
+// rather than what it is: line 0 specifically, since the chip starts there and
+// nothing else can hold it.
 //
 // This is separate from [Program.Validate] because the sequence has to be
-// final. Selection validates a program register allocation may still prepend
-// to, so an instruction that is line 0 there can be line 1 by emission.
+// final — register allocation may still prepend a prologue after selection
+// validates, so an instruction that is line 0 there can be line 1 by emission.
 func (p *Program) CheckPlacement() error {
 	var diags source.DiagnosticList
 	first, fn := p.firstInstr()
@@ -337,8 +342,8 @@ func (p *Program) CheckPlacement() error {
 		return nil
 	}
 	if reason, hazard := ic10.FirstLineHazard(first.Op); hazard {
-		diags.Addf(first.Pos, "'%s' is the program's first instruction: %s; give it any instruction to follow, either a statement ahead of it in '%s' or a global, an array, or an address-taken local, whose zeroing prologue takes line 0",
-			first.Mnemonic(), reason, fn.Name)
+		diags.Addf(first.Pos, "'%s' is the program's first instruction: %s; give it an instruction to follow by putting __ic_yield(); ahead of it in '%s', or a store to a device — a declaration or an assignment will not do it, because nothing observes one before the '%s' and the optimizer drops or sinks what nothing observes",
+			first.Mnemonic(), reason, fn.Name, first.Mnemonic())
 	}
 	return diags.Err()
 }
@@ -367,7 +372,7 @@ func (p *Program) firstInstr() (*Instr, *Func) {
 	return nil, nil
 }
 
-func validateBlock(diags *source.DiagnosticList, fn *Func, block *Block, labels map[string]*Func, owned map[*Block]bool) {
+func validateBlock(diags *source.DiagnosticList, fn *Func, block *Block, labels map[string]*Func) {
 	if block.Label == "" {
 		diags.Addf(block.Pos, "function %s has a block with no label", fn.Name)
 	} else {
@@ -386,6 +391,14 @@ func validateBlock(diags *source.DiagnosticList, fn *Func, block *Block, labels 
 			diags.Addf(instr.Pos, "block %s instruction %d has opcode %v, which is not in the instruction table", block.Label, i, instr.Op)
 			continue
 		}
+		if reason, bad := ic10.Unemittable(instr.Op); bad {
+			diags.Addf(instr.Pos, "block %s instruction %d is %s, which must never be emitted: %s", block.Label, i, info.Mnemonic, reason)
+			continue
+		}
+		if reason, bad := pseudoOps[instr.Op]; bad {
+			diags.Addf(instr.Pos, "block %s instruction %d is %s, which is %s", block.Label, i, info.Mnemonic, reason)
+			continue
+		}
 		if len(instr.Args) != len(info.Operands) {
 			diags.Addf(instr.Pos, "block %s instruction %d is %s with %d operands, and %s takes %d (%s)",
 				block.Label, i, info.Mnemonic, len(instr.Args), info.Mnemonic, len(info.Operands), info.Example)
@@ -402,15 +415,6 @@ func validateBlock(diags *source.DiagnosticList, fn *Func, block *Block, labels 
 				diags.Addf(instr.Pos, "block %s instruction %d has %s at operand %d of %s, which takes %s there (%s)",
 					block.Label, i, arg, j, info.Mnemonic, kindList(info.Operands[j]), info.Example)
 			}
-		}
-	}
-	for _, succ := range block.Succs {
-		if succ == nil {
-			diags.Addf(block.Pos, "block %s has a nil successor", block.Label)
-			continue
-		}
-		if !owned[succ] {
-			diags.Addf(block.Pos, "block %s has successor %s, which is not a block of function %s", block.Label, succ.Label, fn.Name)
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/greg2010/ic11c/internal/ic10"
+	"github.com/greg2010/ic11c/internal/isa"
 	"github.com/greg2010/ic11c/internal/mir"
 	"github.com/greg2010/ic11c/internal/source"
 )
@@ -61,17 +62,13 @@ func imm(v float64) mir.Imm { return mir.Imm{Value: v} }
 
 func sink(b *builder, blk *mir.Block, v mir.VirtReg) {
 	b.t.Helper()
-	b.emit(blk, ic10.OpS, mir.NewDeviceBase(), mir.LogicType{Value: 0}, v)
+	b.emit(blk, isa.OpS, mir.NewDeviceBase(), mir.LogicType{Value: 0}, v)
 }
 
-// limited reserves every register outside the first allocatable ones and the
-// scratch registers that follow them, so a test can pin the size of the
-// register file it allocates against.
-//
-// The file a function is placed in is allocatable+scratch wide, and narrows to
-// allocatable once it spills: scratch is held back only for a function that
-// needs somewhere to reload into. A test that wants a spill therefore has to
-// exceed allocatable+scratch.
+// limited reserves every register past the first allocatable ones and the
+// scratch registers after them, so a test can pin the size of the file it
+// allocates against. The file is allocatable+scratch wide and narrows, once the
+// function spills at all, by what its widest line reads out of memory.
 func limited(t *testing.T, allocatable, scratch, base int) Config {
 	t.Helper()
 	if allocatable+scratch > ic10.NumGeneralRegisters {
@@ -112,15 +109,18 @@ func assertWellFormed(t *testing.T, fn *mir.Func, allowed map[ic10.Register]bool
 			if !allowed[reg.Reg] {
 				t.Errorf("%s: operand %d is %s, which is reserved", instr, j, reg.Reg)
 			}
-			if j < len(info.Operands) && info.Operands[j].Accepts(ic10.OperandDevice) && reg.Reg >= ic10.NumGeneralRegisters {
-				t.Errorf("%s: operand %d holds a device reference in %s, which indirect referencing cannot reach", instr, j, reg.Reg)
+			// Read off the operand table rather than through the allocator's own
+			// deviceConstrained, which would make the gate agree with whatever
+			// that decided. Both kinds are asked for the reason
+			// [TestDeviceConstrained] gives.
+			if j < len(info.Operands) && reg.Reg >= ic10.NumGeneralRegisters &&
+				(info.Operands[j].Accepts(ic10.OperandDevice) || info.Operands[j].Accepts(ic10.OperandRefID)) {
+				t.Errorf("%s: operand %d holds a device reference in %s, which the chip cannot resolve there", instr, j, reg.Reg)
 			}
 		}
 	}
 }
 
-// allowedRegisters is every register the output may name: what the config left
-// allocatable, the scratch registers, and whatever the input already used.
 func allowedRegisters(fn *mir.Func, cfg Config) map[ic10.Register]bool {
 	allowed := make(map[ic10.Register]bool)
 	for _, r := range cfg.allocatable(preassigned(fn)) {
@@ -139,24 +139,23 @@ func straightLine(t *testing.T) *builder {
 	t.Helper()
 	b := newBuilder(t, "straight")
 	blk := b.block("entry")
-	b.emit(blk, ic10.OpMove, b.v("a"), imm(1))
-	b.emit(blk, ic10.OpMove, b.v("b"), imm(2))
-	b.emit(blk, ic10.OpMove, b.v("c"), imm(3))
-	b.emit(blk, ic10.OpAdd, b.v("d"), b.v("a"), b.v("b"))
-	b.emit(blk, ic10.OpAdd, b.v("d"), b.v("d"), b.v("c"))
+	b.emit(blk, isa.OpMove, b.v("a"), imm(1))
+	b.emit(blk, isa.OpMove, b.v("b"), imm(2))
+	b.emit(blk, isa.OpMove, b.v("c"), imm(3))
+	b.emit(blk, isa.OpAdd, b.v("d"), b.v("a"), b.v("b"))
+	b.emit(blk, isa.OpAdd, b.v("d"), b.v("d"), b.v("c"))
 	sink(b, blk, b.v("d"))
 	return b
 }
 
-// pinnedRegister is straightLine with one instruction naming r3 outright, which
-// is the shape instruction selection hands over for a call: an argument or a
-// result register the input pins and carries no live range for.
+// pinnedRegister names r3 outright, which is the shape selection hands over for
+// a call: a register the input pins and carries no live range for.
 func pinnedRegister(t *testing.T) *builder {
 	t.Helper()
 	b := newBuilder(t, "pinned")
 	blk := b.block("entry")
-	b.emit(blk, ic10.OpMove, mir.PhysReg{Reg: 3}, imm(1))
-	b.emit(blk, ic10.OpMove, b.v("a"), mir.PhysReg{Reg: 3})
+	b.emit(blk, isa.OpMove, mir.PhysReg{Reg: 3}, imm(1))
+	b.emit(blk, isa.OpMove, b.v("a"), mir.PhysReg{Reg: 3})
 	sink(b, blk, b.v("a"))
 	return b
 }
@@ -169,22 +168,21 @@ func loopAcrossBackEdge(t *testing.T) *builder {
 	body.AddSucc(body)
 	body.AddSucc(done)
 
-	b.emit(entry, ic10.OpMove, b.v("i"), imm(0))
-	b.emit(entry, ic10.OpMove, b.v("limit"), imm(10))
-	b.emit(entry, ic10.OpMove, b.v("acc"), imm(0))
-	b.emit(entry, ic10.OpJ, mir.Label{Name: "body"})
+	b.emit(entry, isa.OpMove, b.v("i"), imm(0))
+	b.emit(entry, isa.OpMove, b.v("limit"), imm(10))
+	b.emit(entry, isa.OpMove, b.v("acc"), imm(0))
+	b.emit(entry, isa.OpJ, mir.Label{Name: "body"})
 
-	b.emit(body, ic10.OpAdd, b.v("acc"), b.v("acc"), b.v("i"))
-	b.emit(body, ic10.OpAdd, b.v("i"), b.v("i"), imm(1))
-	b.emit(body, ic10.OpBlt, b.v("i"), b.v("limit"), mir.Label{Name: "body"})
+	b.emit(body, isa.OpAdd, b.v("acc"), b.v("acc"), b.v("i"))
+	b.emit(body, isa.OpAdd, b.v("i"), b.v("i"), imm(1))
+	b.emit(body, isa.OpBlt, b.v("i"), b.v("limit"), mir.Label{Name: "body"})
 
 	sink(b, done, b.v("acc"))
 	return b
 }
 
-// liveAcrossIntervening keeps a value live over a block that redefines a
-// different one, which is the shape a naive interval that stops at the last
-// textual use gets wrong.
+// liveAcrossIntervening is the shape an interval stopping at the last textual
+// use gets wrong.
 func liveAcrossIntervening(t *testing.T) *builder {
 	t.Helper()
 	b := newBuilder(t, "intervening")
@@ -192,20 +190,18 @@ func liveAcrossIntervening(t *testing.T) *builder {
 	entry.AddSucc(mid)
 	mid.AddSucc(exit)
 
-	b.emit(entry, ic10.OpMove, b.v("kept"), imm(1))
-	b.emit(entry, ic10.OpMove, b.v("other"), imm(2))
-	b.emit(entry, ic10.OpJ, mir.Label{Name: "mid"})
+	b.emit(entry, isa.OpMove, b.v("kept"), imm(1))
+	b.emit(entry, isa.OpMove, b.v("other"), imm(2))
+	b.emit(entry, isa.OpJ, mir.Label{Name: "mid"})
 
-	b.emit(mid, ic10.OpAdd, b.v("other"), b.v("other"), b.v("other"))
-	b.emit(mid, ic10.OpJ, mir.Label{Name: "exit"})
+	b.emit(mid, isa.OpAdd, b.v("other"), b.v("other"), b.v("other"))
+	b.emit(mid, isa.OpJ, mir.Label{Name: "exit"})
 
-	b.emit(exit, ic10.OpAdd, b.v("sum"), b.v("kept"), b.v("other"))
+	b.emit(exit, isa.OpAdd, b.v("sum"), b.v("kept"), b.v("other"))
 	sink(b, exit, b.v("sum"))
 	return b
 }
 
-// holeAcrossBlock leaves a value live in the first and third blocks and dead in
-// the second, which layout order puts between them.
 func holeAcrossBlock(t *testing.T) *builder {
 	t.Helper()
 	b := newBuilder(t, "hole")
@@ -215,22 +211,20 @@ func holeAcrossBlock(t *testing.T) *builder {
 	skip.AddSucc(join)
 	use.AddSucc(join)
 
-	b.emit(entry, ic10.OpMove, b.v("held"), imm(1))
-	b.emit(entry, ic10.OpMove, b.v("out"), imm(0))
-	b.emit(entry, ic10.OpBlt, imm(0), imm(1), mir.Label{Name: "use"})
+	b.emit(entry, isa.OpMove, b.v("held"), imm(1))
+	b.emit(entry, isa.OpMove, b.v("out"), imm(0))
+	b.emit(entry, isa.OpBlt, imm(0), imm(1), mir.Label{Name: "use"})
 
-	b.emit(skip, ic10.OpMove, b.v("out"), imm(7))
-	b.emit(skip, ic10.OpJ, mir.Label{Name: "join"})
+	b.emit(skip, isa.OpMove, b.v("out"), imm(7))
+	b.emit(skip, isa.OpJ, mir.Label{Name: "join"})
 
-	b.emit(use, ic10.OpAdd, b.v("out"), b.v("held"), imm(2))
-	b.emit(use, ic10.OpJ, mir.Label{Name: "join"})
+	b.emit(use, isa.OpAdd, b.v("out"), b.v("held"), imm(2))
+	b.emit(use, isa.OpJ, mir.Label{Name: "join"})
 
 	sink(b, join, b.v("out"))
 	return b
 }
 
-// valuesInsideAHole puts two whole lifetimes inside another value's hole, so
-// that all three share one register.
 func valuesInsideAHole(t *testing.T) *builder {
 	t.Helper()
 	b := newBuilder(t, "insidehole")
@@ -240,32 +234,30 @@ func valuesInsideAHole(t *testing.T) *builder {
 	skip.AddSucc(join)
 	use.AddSucc(join)
 
-	b.emit(entry, ic10.OpMove, b.v("held"), imm(1))
-	b.emit(entry, ic10.OpBlt, imm(0), imm(1), mir.Label{Name: "use"})
+	b.emit(entry, isa.OpMove, b.v("held"), imm(1))
+	b.emit(entry, isa.OpBlt, imm(0), imm(1), mir.Label{Name: "use"})
 
-	b.emit(skip, ic10.OpMove, b.v("tmp"), imm(5))
-	b.emit(skip, ic10.OpMove, b.v("out"), b.v("tmp"))
-	b.emit(skip, ic10.OpJ, mir.Label{Name: "join"})
+	b.emit(skip, isa.OpMove, b.v("tmp"), imm(5))
+	b.emit(skip, isa.OpMove, b.v("out"), b.v("tmp"))
+	b.emit(skip, isa.OpJ, mir.Label{Name: "join"})
 
-	b.emit(use, ic10.OpAdd, b.v("out"), b.v("held"), imm(2))
-	b.emit(use, ic10.OpJ, mir.Label{Name: "join"})
+	b.emit(use, isa.OpAdd, b.v("out"), b.v("held"), imm(2))
+	b.emit(use, isa.OpJ, mir.Label{Name: "join"})
 
 	sink(b, join, b.v("out"))
 	return b
 }
 
-// crowd adds n values live across the whole function, defined ahead of the
-// entry block and read at the end of the last.
-//
-// It is how a small fixture is pushed past its register file. The file cannot
-// be narrower than the scratch set, and a fixture holding two or three values
-// would otherwise fit in every configuration a spill is expressible in.
+// crowd adds n values live across the whole function, which is how a small
+// fixture is pushed past its register file: the file cannot be narrower than
+// the scratch set, so a two or three value fixture fits in every configuration
+// a spill is expressible in.
 func crowd(t *testing.T, b *builder, n int) *builder {
 	t.Helper()
 	entry, last := b.fn.Blocks[0], b.fn.Blocks[len(b.fn.Blocks)-1]
 	defs := make([]*mir.Instr, 0, n)
 	for i := range n {
-		defs = append(defs, b.instr(ic10.OpMove, b.v("crowd"+strconv.Itoa(i)), imm(float64(i))))
+		defs = append(defs, b.instr(isa.OpMove, b.v("crowd"+strconv.Itoa(i)), imm(float64(i))))
 	}
 	// The reads go on before the definitions go in front, so that a fixture of
 	// one block ends up with the two around its own code rather than inside it.
@@ -283,7 +275,7 @@ func pressure(t *testing.T, n int) *builder {
 	b := newBuilder(t, "pressure")
 	blk := b.block("entry")
 	for i := range n {
-		b.emit(blk, ic10.OpMove, b.v("v"+strconv.Itoa(i)), imm(float64(i)))
+		b.emit(blk, isa.OpMove, b.v("v"+strconv.Itoa(i)), imm(float64(i)))
 	}
 	for i := range n {
 		sink(b, blk, b.v("v"+strconv.Itoa(i)))
@@ -291,21 +283,39 @@ func pressure(t *testing.T, n int) *builder {
 	return b
 }
 
+// twoSpilledInOneLine reads two cold values on one line, the one shape needing
+// a second scratch register: the machine reads every operand before it writes
+// anything, so both reloads have to be in registers at once.
+func twoSpilledInOneLine(t *testing.T) *builder {
+	t.Helper()
+	b := newBuilder(t, "twospilled")
+	blk := b.block("entry")
+	b.emit(blk, isa.OpMove, b.v("cold0"), imm(1))
+	b.emit(blk, isa.OpMove, b.v("cold1"), imm(2))
+	b.emit(blk, isa.OpMove, b.v("hot"), imm(3))
+	for range 4 {
+		b.emit(blk, isa.OpAdd, b.v("hot"), b.v("hot"), b.v("hot"))
+	}
+	b.emit(blk, isa.OpAdd, b.v("out"), b.v("cold0"), b.v("cold1"))
+	b.emit(blk, isa.OpAdd, b.v("out"), b.v("out"), b.v("hot"))
+	sink(b, blk, b.v("out"))
+	return b
+}
+
 func copyThenBothUsed(t *testing.T) *builder {
 	t.Helper()
 	b := newBuilder(t, "interfere")
 	blk := b.block("entry")
-	b.emit(blk, ic10.OpMove, b.v("src"), imm(1))
-	b.emit(blk, ic10.OpMove, b.v("copy"), b.v("src"))
-	b.emit(blk, ic10.OpAdd, b.v("sum"), b.v("src"), b.v("copy"))
+	b.emit(blk, isa.OpMove, b.v("src"), imm(1))
+	b.emit(blk, isa.OpMove, b.v("copy"), b.v("src"))
+	b.emit(blk, isa.OpAdd, b.v("sum"), b.v("src"), b.v("copy"))
 	sink(b, blk, b.v("sum"))
 	return b
 }
 
 // TestAllocatePreservesMeaning is the property the rest of the suite rests on:
-// a rewritten function may look well formed and still read the wrong register.
-// Each case is checked by comparing, for every use, the set of definitions that
-// can reach it before and after allocation.
+// a rewritten function may look well formed and still read the wrong register,
+// so every use is held to the definitions that reached it before allocation.
 func TestAllocatePreservesMeaning(t *testing.T) {
 	crowded := func(build func(*testing.T) *builder, n int) func(*testing.T) *builder {
 		return func(t *testing.T) *builder { return crowd(t, build(t), n) }
@@ -353,11 +363,14 @@ func TestAllocatePreservesMeaning(t *testing.T) {
 }
 
 // TestAllocateRegisterPressure pins the cost of each value past the register
-// file. The step at the threshold is scratch+1 rather than one, because the
-// first spill is also what gives the scratch set up.
+// file. The step at the threshold is two rather than one: the first spill also
+// gives up the one scratch register a one-value-per-line fixture needs.
 func TestAllocateRegisterPressure(t *testing.T) {
 	const allocatable, scratch = 4, 2
 	const file = allocatable + scratch
+	// No line of the fixture names two values, so one register serves every
+	// reload and the rest of the scratch set stays allocatable.
+	const kept = file - 1
 	tests := []struct {
 		name       string
 		live       int
@@ -365,8 +378,8 @@ func TestAllocateRegisterPressure(t *testing.T) {
 	}{
 		{name: "fewer values than registers", live: file - 1, wantSpills: 0},
 		{name: "exactly as many values as registers", live: file, wantSpills: 0},
-		{name: "one value past the register file", live: file + 1, wantSpills: file + 1 - allocatable},
-		{name: "two values past the register file", live: file + 2, wantSpills: file + 2 - allocatable},
+		{name: "one value past the register file", live: file + 1, wantSpills: file + 1 - kept},
+		{name: "two values past the register file", live: file + 2, wantSpills: file + 2 - kept},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -383,8 +396,11 @@ func TestAllocateRegisterPressure(t *testing.T) {
 			if res.SpillSlots != tt.wantSpills {
 				t.Errorf("SpillSlots = %d, want %d", res.SpillSlots, tt.wantSpills)
 			}
-			if got := spillCode(b.fn); (got > 0) != (tt.wantSpills > 0) {
-				t.Errorf("%d spill instructions were emitted with %d spilled registers", got, tt.wantSpills)
+			// Every value is written once and read once, so a spilled one costs a
+			// poke and a get db. Counting rather than asking whether any were
+			// emitted is what makes a double reload visible.
+			if got, want := spillCode(b.fn), 2*tt.wantSpills; got != want {
+				t.Errorf("%d spill instructions were emitted for %d spilled values, want %d", got, tt.wantSpills, want)
 			}
 			// The same reason no two share a slot: no two may share a register.
 			seen := make(map[ic10.Register]mir.VirtReg)
@@ -399,16 +415,15 @@ func TestAllocateRegisterPressure(t *testing.T) {
 }
 
 // TestDefaultScratch holds the shipped scratch set to what the rest of the
-// package assumes of it: wide enough for the most register sources any
-// instruction reads, inside the range a device reference resolves in, and a
-// fresh slice per call.
+// package assumes: wide enough for the most register sources any instruction
+// reads, inside the range a device reference resolves in, a fresh slice per
+// call.
 func TestDefaultScratch(t *testing.T) {
 	scratch := DefaultScratch()
 
-	// Three register-capable sources is what select, clamp, lerp, lbns, sbn and
-	// sbs read, and they are the widest instruction selection emits. A wider one
-	// is reported as a shortfall by planInstr rather than miscompiled, which is
-	// what makes the number a size choice and not a correctness one.
+	// Three register sources is what select, clamp, lerp, lbns, sbn and sbs
+	// read, the widest selection emits. A wider one is reported as a shortfall
+	// rather than miscompiled, which makes the number a size choice.
 	if want := 3; len(scratch) != want {
 		t.Errorf("DefaultScratch() = %v, want %d registers", scratch, want)
 	}
@@ -440,10 +455,8 @@ func TestDefaultScratch(t *testing.T) {
 }
 
 // TestAllocateHoldsScratchBackOnlyForASpill pins where the spill threshold
-// sits. Scratch exists to reload a spilled operand into, so a function that
-// spills nothing needs none of it, and reserving it unconditionally would start
-// spilling three values early — each costing a poke and a get db per touch —
-// on a function that fits in the file exactly.
+// sits. Scratch exists to reload into, so reserving it unconditionally would
+// spill three values early on a function that fits in the file exactly.
 func TestAllocateHoldsScratchBackOnlyForASpill(t *testing.T) {
 	scratch := DefaultScratch()
 	file := ic10.NumRegisters - len(scratch)
@@ -457,9 +470,9 @@ func TestAllocateHoldsScratchBackOnlyForASpill(t *testing.T) {
 		{live: file + 1, wantSpills: 0},
 		{live: ic10.NumRegisters - 1, wantSpills: 0},
 		{live: ic10.NumRegisters, wantSpills: 0},
-		// One value past the file spills, and holding scratch back for it
-		// costs the three registers scratch occupies as well.
-		{live: ic10.NumRegisters + 1, wantSpills: ic10.NumRegisters + 1 - file},
+		// The reload costs one register of the scratch set rather than all
+		// three: no line of this fixture names two values.
+		{live: ic10.NumRegisters + 1, wantSpills: ic10.NumRegisters + 1 - (ic10.NumRegisters - 1)},
 	}
 	for _, tt := range tests {
 		t.Run(source.Plural(tt.live, "live value"), func(t *testing.T) {
@@ -481,9 +494,252 @@ func TestAllocateHoldsScratchBackOnlyForASpill(t *testing.T) {
 	}
 }
 
+// scratchInUse counts the configured scratch registers that ended up holding an
+// ordinary value rather than being held back for reloads.
+func scratchInUse(res Result, cfg Config) int {
+	taken := make(map[ic10.Register]bool, len(res.assigned))
+	for _, reg := range res.assigned {
+		taken[reg] = true
+	}
+	inUse := 0
+	for _, r := range cfg.Scratch {
+		if taken[r] {
+			inUse++
+		}
+	}
+	return inUse
+}
+
+// TestAllocateHoldsBackOnlyTheScratchAnInstructionNeeds pins the reservation to
+// one register per distinct spilled operand one line reads, which does not grow
+// with how much the function spilled. Holding back the whole configured set
+// instead would spill two more values, each costing a poke and a get db a touch.
+func TestAllocateHoldsBackOnlyTheScratchAnInstructionNeeds(t *testing.T) {
+	tests := []struct {
+		name             string
+		build            func(t *testing.T) *builder
+		cfg              Config
+		wantSpills       int
+		wantScratchInUse int
+	}{
+		{
+			// pressure writes and reads each value on its own line, so no
+			// instruction ever names two spilled values.
+			name:             "one value per line gives up one register",
+			build:            func(t *testing.T) *builder { return pressure(t, ic10.NumRegisters+1) },
+			cfg:              Config{Scratch: DefaultScratch()},
+			wantSpills:       ic10.NumRegisters + 1 - (ic10.NumRegisters - 1),
+			wantScratchInUse: len(DefaultScratch()) - 1,
+		},
+		{
+			// The first placement sends one of the two cold values to memory and
+			// asks for one register. Holding that one back sends the other after
+			// it, and the line that reads both then wants two.
+			name:             "a line reading two spilled values gives up two",
+			build:            twoSpilledInOneLine,
+			cfg:              limited(t, 0, 2, 0),
+			wantSpills:       4,
+			wantScratchInUse: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := tt.build(t)
+			allowed := allowedRegisters(b.fn, tt.cfg)
+			res := checkMeaningPreserved(t, b.fn, tt.cfg)
+			assertWellFormed(t, b.fn, allowed)
+
+			if got := len(res.spilled); got != tt.wantSpills {
+				t.Errorf("spilled %d values (%v), want %d", got, res.spilled, tt.wantSpills)
+			}
+			if got := scratchInUse(res, tt.cfg); got != tt.wantScratchInUse {
+				t.Errorf("%d of the %d scratch registers hold a value, want %d", got, len(tt.cfg.Scratch), tt.wantScratchInUse)
+			}
+		})
+	}
+}
+
+// TestScratchDemand covers what one instruction asks of the scratch set. The
+// two walks have to agree exactly: an understated demand is planned against a
+// prefix that does not hold what it reaches for, and an overstated one takes a
+// register off the ordinary values of the whole function.
+func TestScratchDemand(t *testing.T) {
+	tests := []struct {
+		name    string
+		build   func(t *testing.T) *builder
+		spilled []string
+		want    int
+	}{
+		{
+			name: "a function with nothing in memory",
+			build: func(t *testing.T) *builder {
+				t.Helper()
+				b := newBuilder(t, "none")
+				blk := b.block("entry")
+				b.emit(blk, isa.OpMove, b.v("x"), imm(1))
+				b.emit(blk, isa.OpAdd, b.v("y"), b.v("x"), imm(2))
+				sink(b, blk, b.v("y"))
+				return b
+			},
+			want: 0,
+		},
+		{
+			// The result goes to memory and every source is in a register, so
+			// nothing is reloaded and the store still needs somewhere to be
+			// computed before it is poked out.
+			name: "a line writing a spilled value and reading none",
+			build: func(t *testing.T) *builder {
+				t.Helper()
+				b := newBuilder(t, "writeonly")
+				blk := b.block("entry")
+				b.emit(blk, isa.OpMove, b.v("x"), imm(1))
+				b.emit(blk, isa.OpAdd, b.v("y"), b.v("x"), imm(2))
+				sink(b, blk, b.v("y"))
+				return b
+			},
+			spilled: []string{"y"},
+			want:    1,
+		},
+		{
+			// The destination takes back the register the source borrowed, so
+			// the two together want one rather than two.
+			name: "a line writing a spilled value and reading one",
+			build: func(t *testing.T) *builder {
+				t.Helper()
+				b := newBuilder(t, "both")
+				blk := b.block("entry")
+				b.emit(blk, isa.OpMove, b.v("x"), imm(1))
+				b.emit(blk, isa.OpAdd, b.v("y"), b.v("x"), imm(2))
+				sink(b, blk, b.v("y"))
+				return b
+			},
+			spilled: []string{"x", "y"},
+			want:    1,
+		},
+		{
+			name: "a line reading two spilled values",
+			build: func(t *testing.T) *builder {
+				t.Helper()
+				b := newBuilder(t, "two")
+				blk := b.block("entry")
+				b.emit(blk, isa.OpMove, b.v("x"), imm(1))
+				b.emit(blk, isa.OpMove, b.v("y"), imm(2))
+				b.emit(blk, isa.OpAdd, b.v("z"), b.v("x"), b.v("y"))
+				sink(b, blk, b.v("z"))
+				return b
+			},
+			spilled: []string{"x", "y"},
+			want:    2,
+		},
+		{
+			// One reload serves both positions, so the same value named twice
+			// is one register and not two.
+			name: "a line reading one spilled value twice",
+			build: func(t *testing.T) *builder {
+				t.Helper()
+				b := newBuilder(t, "twice")
+				blk := b.block("entry")
+				b.emit(blk, isa.OpMove, b.v("x"), imm(1))
+				b.emit(blk, isa.OpAdd, b.v("z"), b.v("x"), b.v("x"))
+				sink(b, blk, b.v("z"))
+				return b
+			},
+			spilled: []string{"x"},
+			want:    1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := tt.build(t)
+			inMemory := make(map[mir.VirtReg]bool, len(tt.spilled))
+			for _, name := range tt.spilled {
+				v, named := b.vr[name]
+				if !named {
+					t.Fatalf("the function has no value named %s", name)
+				}
+				inMemory[v] = true
+			}
+			got, err := scratchDemand(b.fn, func(v mir.VirtReg) bool { return inMemory[v] })
+			if err != nil {
+				t.Fatalf("scratchDemand: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("scratchDemand = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAllocateSpillsADefinitionNothingReads is what makes the spilled
+// destination above a case rather than a precaution. A definition with no
+// reader is live for one point and touched once, so its own line reads nothing
+// out of memory — the one shape whose whole demand comes from the destination.
+func TestAllocateSpillsADefinitionNothingReads(t *testing.T) {
+	tests := []struct {
+		name string
+		// third is the last operand of the line defining dead. A register there
+		// makes x dearer to spill than dead; a literal ties the two, which is
+		// where the comparison decides rather than agreeing with the other side.
+		third mir.Operand
+	}{
+		{name: "the value holding the register is dearer", third: nil},
+		{name: "the value holding the register costs the same", third: imm(0)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newBuilder(t, "defonly")
+			blk := b.block("entry")
+			third := tt.third
+			if third == nil {
+				third = b.v("x")
+			}
+			b.emit(blk, isa.OpMove, b.v("x"), imm(1))
+			b.emit(blk, isa.OpSelect, b.v("dead"), b.v("x"), b.v("x"), third)
+			sink(b, blk, b.v("x"))
+
+			cfg := limited(t, 0, 1, 0)
+			intervals, constrained, err := buildIntervals(b.fn, mustNumber(t, b.fn))
+			if err != nil {
+				t.Fatalf("buildIntervals: %v", err)
+			}
+			_, spilled, err := scan(intervals, constrained, cfg.allocatable(nil), cfg)
+			if err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			if len(spilled) != 1 || spilled[0].vreg != b.vr["dead"] {
+				t.Fatalf("the placement sent %v to memory, want dead alone", spilled)
+			}
+			if got, err := scratchDemand(b.fn, inMemory(spilled)); err != nil || got != 1 {
+				t.Fatalf("scratchDemand = %d, %v, want 1 and no error: the definition's own line reads nothing out of memory", got, err)
+			}
+
+			allowed := allowedRegisters(b.fn, cfg)
+			res, err := Allocate(b.fn, cfg)
+			if err != nil {
+				t.Fatalf("Allocate: %v", err)
+			}
+			assertWellFormed(t, b.fn, allowed)
+			if _, inMemory := res.spilled[b.vr["dead"]]; !inMemory {
+				t.Errorf("dead was given a register, want the slot the placement chose for it")
+			}
+		})
+	}
+}
+
+func mustNumber(t *testing.T, fn *mir.Func) numbering {
+	t.Helper()
+	nums, err := number(fn)
+	if err != nil {
+		t.Fatalf("number: %v", err)
+	}
+	return nums
+}
+
 // TestAllocateDoesNotShareARegisterAcrossInterference guards the case a
-// coalescing allocator gets wrong: a copy whose source is read again afterwards
-// keeps both values alive, so they cannot share.
+// coalescing allocator gets wrong: a copy whose source is read again keeps both
+// values alive, so they cannot share.
 func TestAllocateDoesNotShareARegisterAcrossInterference(t *testing.T) {
 	b := copyThenBothUsed(t)
 	res, err := Allocate(b.fn, limited(t, 8, 1, 0))
@@ -505,7 +761,7 @@ func TestAllocateDoesNotShareARegisterAcrossInterference(t *testing.T) {
 
 // TestAllocateSpillSlotReuse covers what keeps the boundary between the data
 // region and the call frames low. held is there only to put the function over
-// the register file, so that x and y reach memory at all.
+// the file, so that x and y reach memory at all.
 func TestAllocateSpillSlotReuse(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -520,16 +776,16 @@ func TestAllocateSpillSlotReuse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			b := newBuilder(t, "slots")
 			blk := b.block("entry")
-			b.emit(blk, ic10.OpMove, b.v("held"), imm(0))
+			b.emit(blk, isa.OpMove, b.v("held"), imm(0))
 			if tt.overlap {
-				b.emit(blk, ic10.OpMove, b.v("x"), imm(1))
-				b.emit(blk, ic10.OpMove, b.v("y"), imm(2))
+				b.emit(blk, isa.OpMove, b.v("x"), imm(1))
+				b.emit(blk, isa.OpMove, b.v("y"), imm(2))
 				sink(b, blk, b.v("x"))
 				sink(b, blk, b.v("y"))
 			} else {
-				b.emit(blk, ic10.OpMove, b.v("x"), imm(1))
+				b.emit(blk, isa.OpMove, b.v("x"), imm(1))
 				sink(b, blk, b.v("x"))
-				b.emit(blk, ic10.OpMove, b.v("y"), imm(2))
+				b.emit(blk, isa.OpMove, b.v("y"), imm(2))
 				sink(b, blk, b.v("y"))
 			}
 			sink(b, blk, b.v("held"))
@@ -551,32 +807,110 @@ func TestAllocateSpillSlotReuse(t *testing.T) {
 	}
 }
 
+// TestAssignSlotsSeparatesOverlappingValuesInAnyOrder holds slot assignment to
+// its invariant without borrowing the caller's ordering. The walk prunes an
+// occupant once its interval ends, which is exact only while the points arrive
+// in non-decreasing order and drops a live one as soon as they do not.
+func TestAssignSlotsSeparatesOverlappingValuesInAnyOrder(t *testing.T) {
+	const base = 7
+	// early and late are disjoint, so they may share; middle overlaps early
+	// and must not.
+	early := &interval{vreg: mir.VirtReg{ID: 1}, ranges: []liveRange{{from: 0, to: 10}}}
+	late := &interval{vreg: mir.VirtReg{ID: 2}, ranges: []liveRange{{from: 20, to: 30}}}
+	middle := &interval{vreg: mir.VirtReg{ID: 3}, ranges: []liveRange{{from: 5, to: 15}}}
+
+	tests := []struct {
+		name    string
+		spilled []*interval
+	}{
+		{name: "ordered by first live point", spilled: []*interval{early, middle, late}},
+		{name: "the overlapping value arrives last", spilled: []*interval{early, late, middle}},
+		{name: "reversed", spilled: []*interval{late, middle, early}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			slots, count := assignSlots(tt.spilled, base)
+			if len(slots) != len(tt.spilled) {
+				t.Fatalf("assignSlots placed %d of %d intervals", len(slots), len(tt.spilled))
+			}
+			for i, a := range tt.spilled {
+				if slot := slots[a.vreg]; slot < base || slot-base >= count {
+					t.Errorf("%s holds slot %d, outside the %d slots from %d the count reserves", a.vreg, slot, count, base)
+				}
+				for _, b := range tt.spilled[i+1:] {
+					if a.intersects(b) && slots[a.vreg] == slots[b.vreg] {
+						t.Errorf("%s and %s are live at once and both hold slot %d", a.vreg, b.vreg, slots[a.vreg])
+					}
+				}
+			}
+			if want := 2; count != want {
+				t.Errorf("the assignment reserved %d slots, want %d", count, want)
+			}
+		})
+	}
+}
+
+// TestAllocateSlotsOfSuccessiveFunctionsAreDisjoint holds Result.SpillSlots to
+// what a driver allocating a whole program reads it for. Allocation is per
+// function, so only stacking each base on the last one's count keeps a callee
+// out of its caller's slots — which is what [clobbered] assumes of them.
+func TestAllocateSlotsOfSuccessiveFunctionsAreDisjoint(t *testing.T) {
+	const base = 12
+	first, second := crowd(t, straightLine(t), 2), crowd(t, pressure(t, 4), 2)
+
+	firstRes, err := Allocate(first.fn, limited(t, 1, 2, base))
+	if err != nil {
+		t.Fatalf("Allocate the first function: %v", err)
+	}
+	secondRes, err := Allocate(second.fn, limited(t, 1, 2, base+firstRes.SpillSlots))
+	if err != nil {
+		t.Fatalf("Allocate the second function: %v", err)
+	}
+	if firstRes.SpillSlots == 0 || secondRes.SpillSlots == 0 {
+		t.Fatalf("the functions took %d and %d slots, so the case proves nothing", firstRes.SpillSlots, secondRes.SpillSlots)
+	}
+
+	taken := make(map[int]string, len(firstRes.spilled))
+	for v, slot := range firstRes.spilled {
+		taken[slot] = v.String()
+	}
+	for v, slot := range secondRes.spilled {
+		if other, clash := taken[slot]; clash {
+			t.Errorf("%s of the second function and %s of the first both hold slot %d", v, other, slot)
+		}
+		if slot < base+firstRes.SpillSlots {
+			t.Errorf("%s of the second function holds slot %d, below the %d its base was set to", v, slot, base+firstRes.SpillSlots)
+		}
+	}
+}
+
 // TestAllocateSpillsLongColdOverShortHot pins the heuristic. The value read on
-// every line of the loop stays in a register; the one computed early and read
-// once at the far end goes to memory, because a spill costs an instruction per
-// touch and buys back a register for the whole span.
+// every line stays in a register and the one read once at the far end goes to
+// memory: a spill costs an instruction per touch and buys back a whole span.
 func TestAllocateSpillsLongColdOverShortHot(t *testing.T) {
 	b := newBuilder(t, "heuristic")
 	blk := b.block("entry")
-	// Three of them, so the function is over the register file by more than the
-	// scratch set the first spill also gives up.
+	// Three, so that what is left of the file once the hot value and the two
+	// around it have one cannot hold a cold value either, and the ranking rather
+	// than the count decides which go.
 	colds := []string{"cold0", "cold1", "cold2"}
 	for i, name := range colds {
-		b.emit(blk, ic10.OpMove, b.v(name), imm(float64(i)))
+		b.emit(blk, isa.OpMove, b.v(name), imm(float64(i)))
 	}
-	b.emit(blk, ic10.OpMove, b.v("hot"), imm(2))
+	b.emit(blk, isa.OpMove, b.v("hot"), imm(2))
 	for range 3 {
-		b.emit(blk, ic10.OpAdd, b.v("hot"), b.v("hot"), b.v("hot"))
+		b.emit(blk, isa.OpAdd, b.v("hot"), b.v("hot"), b.v("hot"))
 	}
-	b.emit(blk, ic10.OpMove, b.v("late"), imm(3))
-	b.emit(blk, ic10.OpAdd, b.v("late"), b.v("late"), b.v("hot"))
-	b.emit(blk, ic10.OpMove, b.v("sum"), b.v("late"))
+	b.emit(blk, isa.OpMove, b.v("late"), imm(3))
+	b.emit(blk, isa.OpAdd, b.v("late"), b.v("late"), b.v("hot"))
+	b.emit(blk, isa.OpMove, b.v("sum"), b.v("late"))
 	for _, name := range colds {
-		b.emit(blk, ic10.OpAdd, b.v("sum"), b.v("sum"), b.v(name))
+		b.emit(blk, isa.OpAdd, b.v("sum"), b.v("sum"), b.v(name))
 	}
 	sink(b, blk, b.v("sum"))
 
-	cfg := limited(t, 2, 2, 0)
+	cfg := limited(t, 1, 2, 0)
 	allowed := allowedRegisters(b.fn, cfg)
 	res := checkMeaningPreserved(t, b.fn, cfg)
 	assertWellFormed(t, b.fn, allowed)
@@ -590,6 +924,75 @@ func TestAllocateSpillsLongColdOverShortHot(t *testing.T) {
 		if slot, spilled := res.spilled[b.vr[name]]; spilled {
 			t.Errorf("%s was spilled to slot %d, want it kept in a register", name, slot)
 		}
+	}
+}
+
+// TestSpillScoreWeighsTouchesAgainstSpan pins the ranking rather than the one
+// placement above. A ranking reading the cost alone agrees with that placement,
+// where both candidates live the same stretch, and sends the wrong one to
+// memory as soon as they do not.
+func TestSpillScoreWeighsTouchesAgainstSpan(t *testing.T) {
+	iv := func(touches int, ranges ...liveRange) *interval {
+		return &interval{vreg: mir.VirtReg{ID: 1}, ranges: ranges, touches: touches}
+	}
+	tests := []struct {
+		name            string
+		cheaper, dearer *interval
+	}{
+		{
+			name:    "a long cold interval beats a short hot one it is touched more than",
+			cheaper: iv(4, liveRange{from: 0, to: 40}),
+			dearer:  iv(2, liveRange{from: 0, to: 2}),
+		},
+		{
+			name:    "over the same span the fewer touches are cheaper",
+			cheaper: iv(2, liveRange{from: 0, to: 10}),
+			dearer:  iv(4, liveRange{from: 0, to: 10}),
+		},
+		{
+			name:    "for the same touches the longer span is cheaper",
+			cheaper: iv(2, liveRange{from: 0, to: 20}),
+			dearer:  iv(2, liveRange{from: 0, to: 4}),
+		},
+		{
+			// A hole holds no register, so it buys nothing back. Measuring the
+			// distance from the first point to the last instead would rank the
+			// value with the hole as the wider of the two.
+			name:    "a hole in the interval is not span",
+			cheaper: iv(2, liveRange{from: 0, to: 10}),
+			dearer:  iv(2, liveRange{from: 0, to: 2}, liveRange{from: 30, to: 32}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if cheaper, dearer := spillScore(tt.cheaper), spillScore(tt.dearer); cheaper >= dearer {
+				t.Errorf("spillScore ranked the intervals %v and %v, want the first strictly lower", cheaper, dearer)
+			}
+		})
+	}
+}
+
+// TestCheapestVictimLeavesATieWhereItIs pins which register an eviction takes
+// when two cost the same to free. Config.allocatable hands them out
+// cheapest-to-render first, so taking the later candidate spends bytes against
+// the 4096 byte budget for nothing.
+func TestCheapestVictimLeavesATieWhereItIs(t *testing.T) {
+	tied := func(id uint32) *interval {
+		return &interval{vreg: mir.VirtReg{ID: id}, ranges: []liveRange{{from: 0, to: 10}}, touches: 5}
+	}
+	candidates := []ic10.Register{3, 7, 9}
+	occupied := map[ic10.Register][]*interval{3: {tied(1)}, 7: {tied(2)}, 9: {tied(3)}}
+
+	reg, score, ok := cheapestVictim(candidates, occupied)
+	if !ok {
+		t.Fatal("cheapestVictim found no occupied register among three")
+	}
+	if reg != candidates[0] {
+		t.Errorf("the eviction took %s, want %s: equally priced registers leave the earliest candidate in place", reg, candidates[0])
+	}
+	if want := spillScore(tied(1)); score != want {
+		t.Errorf("the victim scored %v, want %v", score, want)
 	}
 }
 
@@ -659,14 +1062,14 @@ func TestAllocateRespectsReservation(t *testing.T) {
 }
 
 // TestAllocateReservesPhysicalRegistersAlreadyNamed covers input in mixed form:
-// instruction selection that pinned a register carries no live range for it, so
-// the allocator has to hold it back for the whole function.
+// a register selection pinned carries no live range, so the allocator has to
+// hold it back for the whole function.
 func TestAllocateReservesPhysicalRegistersAlreadyNamed(t *testing.T) {
 	b := newBuilder(t, "preassigned")
 	blk := b.block("entry")
-	b.emit(blk, ic10.OpMove, b.v("a"), mir.PhysReg{Reg: 3})
-	b.emit(blk, ic10.OpMove, b.v("b"), imm(2))
-	b.emit(blk, ic10.OpAdd, b.v("c"), b.v("a"), b.v("b"))
+	b.emit(blk, isa.OpMove, b.v("a"), mir.PhysReg{Reg: 3})
+	b.emit(blk, isa.OpMove, b.v("b"), imm(2))
+	b.emit(blk, isa.OpAdd, b.v("c"), b.v("a"), b.v("b"))
 	sink(b, blk, b.v("c"))
 
 	cfg := Config{Scratch: []ic10.Register{15}}
@@ -682,38 +1085,61 @@ func TestAllocateReservesPhysicalRegistersAlreadyNamed(t *testing.T) {
 }
 
 // TestAllocateKeepsDeviceReferencesInRange covers the one range restriction the
-// machine imposes on a register: a register holding a device reference resolves
-// within r0 through r15, so sp and ra are out even when nothing reserves them.
-//
-// No selection pattern builds such an operand today — every device operand
-// internal/isel emits is a pin or db — so the case assembles the machine IR by
-// hand.
+// machine imposes: a register holding a device reference resolves within r0
+// through r15, so sp and ra are out even when nothing reserves them. No
+// selection pattern builds such an operand, so the cases build the IR by hand.
 func TestAllocateKeepsDeviceReferencesInRange(t *testing.T) {
-	b := newBuilder(t, "device")
-	blk := b.block("entry")
-	b.emit(blk, ic10.OpMove, b.v("first"), imm(1))
-	b.emit(blk, ic10.OpMove, b.v("second"), imm(2))
-	b.emit(blk, ic10.OpMove, b.v("pin"), imm(3))
-	b.emit(blk, ic10.OpL, b.v("read"), b.v("pin"), mir.LogicType{Value: 0})
-	sink(b, blk, b.v("read"))
-	sink(b, blk, b.v("first"))
-	sink(b, blk, b.v("second"))
-
-	cfg := Config{Scratch: []ic10.Register{0}}
-	for r := ic10.Register(1); r < ic10.NumGeneralRegisters; r++ {
-		if r != 5 {
-			cfg.Reserved = append(cfg.Reserved, r)
-		}
+	tests := []struct {
+		name string
+		// use reads the device through the virtual register named pin, which the
+		// shared body has already defined. The configuration leaves r5, sp and
+		// ra allocatable and hands the shorter names out first, so an
+		// unconstrained value in the reference position lands in sp.
+		use func(b *builder, blk *mir.Block)
+	}{
+		{
+			name: "a position that also accepts a device pin",
+			use: func(b *builder, blk *mir.Block) {
+				b.emit(blk, isa.OpL, b.v("read"), b.v("pin"), mir.LogicType{Value: 0})
+				sink(b, blk, b.v("read"))
+			},
+		},
+		{
+			name: "a reference id position that accepts no device pin",
+			use: func(b *builder, blk *mir.Block) {
+				b.emit(blk, isa.OpMove, b.v("written"), imm(4))
+				b.emit(blk, isa.OpSd, b.v("pin"), mir.LogicType{Value: 0}, b.v("written"))
+			},
+		},
 	}
-	allowed := allowedRegisters(b.fn, cfg)
-	res := checkMeaningPreserved(t, b.fn, cfg)
-	assertWellFormed(t, b.fn, allowed)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newBuilder(t, "device")
+			blk := b.block("entry")
+			b.emit(blk, isa.OpMove, b.v("first"), imm(1))
+			b.emit(blk, isa.OpMove, b.v("second"), imm(2))
+			b.emit(blk, isa.OpMove, b.v("pin"), imm(3))
+			tt.use(b, blk)
+			sink(b, blk, b.v("first"))
+			sink(b, blk, b.v("second"))
 
-	if reg, ok := res.assigned[b.vr["pin"]]; ok && reg >= ic10.NumGeneralRegisters {
-		t.Errorf("pin holds a device reference in %s, which the chip cannot resolve there", reg)
-	}
-	if len(res.assigned) == 0 {
-		t.Fatalf("nothing was assigned a register, so the case proves nothing")
+			cfg := Config{Scratch: []ic10.Register{0}}
+			for r := ic10.Register(1); r < ic10.NumGeneralRegisters; r++ {
+				if r != 5 {
+					cfg.Reserved = append(cfg.Reserved, r)
+				}
+			}
+			allowed := allowedRegisters(b.fn, cfg)
+			res := checkMeaningPreserved(t, b.fn, cfg)
+			assertWellFormed(t, b.fn, allowed)
+
+			if reg, ok := res.assigned[b.vr["pin"]]; ok && reg >= ic10.NumGeneralRegisters {
+				t.Errorf("pin holds a device reference in %s, which the chip cannot resolve there", reg)
+			}
+			if len(res.assigned) == 0 {
+				t.Fatalf("nothing was assigned a register, so the case proves nothing")
+			}
+		})
 	}
 }
 
@@ -721,7 +1147,7 @@ func TestAllocateKeepsDeviceReferencesInRange(t *testing.T) {
 func spillCode(fn *mir.Func) int {
 	count := 0
 	for _, instr := range fn.AllInstrs() {
-		if instr.Op == ic10.OpGet || instr.Op == ic10.OpPoke {
+		if instr.Op == isa.OpGet || instr.Op == isa.OpPoke {
 			count++
 		}
 	}
@@ -729,11 +1155,9 @@ func spillCode(fn *mir.Func) int {
 }
 
 // TestAllocateAttributesSpillCode checks that inserted instructions carry the
-// position and the inline chain of the instruction they serve. Either one
-// missing makes the byte attribution report charge the bytes to the wrong
-// construct: a spill with no position claims bytes nobody wrote, and a spill
-// with no chain charges an inlined body's cost to the function it landed in
-// rather than to the call that spliced it there.
+// position and the inline chain of the instruction they serve. Without the
+// position the byte report claims bytes nobody wrote; without the chain it
+// charges an inlined body's cost to the function it landed in.
 func TestAllocateAttributesSpillCode(t *testing.T) {
 	b := straightLine(t)
 	site := []source.InlineSite{{Pos: source.Position{File: "t.mc", Line: 4, Column: 2}, Callee: "helper"}}
@@ -766,14 +1190,14 @@ func TestAllocateAttributesSpillCode(t *testing.T) {
 			// no other opcode has a neighbour to borrow a position from.
 			//exhaustive:ignore
 			switch instr.Op {
-			case ic10.OpGet:
+			case isa.OpGet:
 				for j := i + 1; j < len(block.Instrs); j++ {
 					if original[block.Instrs[j]] {
 						neighbour = block.Instrs[j]
 						break
 					}
 				}
-			case ic10.OpPoke:
+			case isa.OpPoke:
 				for j := i - 1; j >= 0; j-- {
 					if original[block.Instrs[j]] {
 						neighbour = block.Instrs[j]
@@ -807,8 +1231,8 @@ func TestAllocateAttributesSpillCode(t *testing.T) {
 func TestAllocateReloadsASpilledValueOncePerInstruction(t *testing.T) {
 	b := newBuilder(t, "doubleuse")
 	blk := b.block("entry")
-	b.emit(blk, ic10.OpMove, b.v("x"), imm(1))
-	b.emit(blk, ic10.OpAdd, b.v("y"), b.v("x"), b.v("x"))
+	b.emit(blk, isa.OpMove, b.v("x"), imm(1))
+	b.emit(blk, isa.OpAdd, b.v("y"), b.v("x"), b.v("x"))
 	sink(b, blk, b.v("y"))
 	sink(b, blk, b.v("x"))
 
@@ -822,7 +1246,7 @@ func TestAllocateReloadsASpilledValueOncePerInstruction(t *testing.T) {
 	}
 	reloads := 0
 	for _, instr := range b.fn.Blocks[0].Instrs {
-		if instr.Op == ic10.OpGet {
+		if instr.Op == isa.OpGet {
 			reloads++
 		}
 	}
@@ -866,7 +1290,7 @@ func TestAllocateErrors(t *testing.T) {
 		{
 			name:        "spill base past the data region",
 			build:       straightLine,
-			cfg:         Config{Scratch: []ic10.Register{0}, SpillSlotBase: ic10.NumMemorySlots},
+			cfg:         Config{Scratch: []ic10.Register{0}, SpillSlotBase: ic10.NumMemorySlots + 1},
 			wantMention: "data region",
 		},
 		{
@@ -879,13 +1303,13 @@ func TestAllocateErrors(t *testing.T) {
 			name:        "spilling needed with no scratch",
 			build:       straightLine,
 			cfg:         limited(t, 1, 0, 0),
-			wantMention: "no scratch register is configured",
+			wantMention: "Config.Scratch is empty",
 		},
 		{
 			name:        "one scratch register for two spilled operands",
 			build:       straightLine,
 			cfg:         limited(t, 0, 1, 0),
-			wantMention: "only 1 scratch registers are configured",
+			wantMention: "2 distinct spilled operands and the configuration holds back 1 scratch register",
 		},
 		{
 			name:        "spill slots past the end of memory",
@@ -897,7 +1321,10 @@ func TestAllocateErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b := tt.build(t)
-			before := b.fn.RegForm()
+			// The whole rendering rather than the register form: a form that did
+			// not move says only that no operand was rewritten, and cannot see an
+			// instruction inserted around one.
+			before := rendered(b.fn)
 			res, err := Allocate(b.fn, tt.cfg)
 			if err == nil {
 				t.Fatalf("Allocate succeeded with %+v, want a rejection", res)
@@ -905,8 +1332,91 @@ func TestAllocateErrors(t *testing.T) {
 			if !strings.Contains(err.Error(), tt.wantMention) {
 				t.Errorf("error = %q, want it to mention %q", err, tt.wantMention)
 			}
-			if got := b.fn.RegForm(); got != before {
-				t.Errorf("RegForm after a failed allocation = %v, want %v: the function must be left alone", got, before)
+			if after := rendered(b.fn); !slices.Equal(after, before) {
+				t.Errorf("a failed allocation left\n%s\nwant the function it was given\n%s",
+					strings.Join(after, "\n"), strings.Join(before, "\n"))
+			}
+		})
+	}
+}
+
+// TestAllocateAcceptsAFullDataRegionThatSpillsNothing covers the boundary
+// between a data region that is full and one that has overflowed. A program
+// taking every slot and spilling nothing runs, so what refuses the function
+// that does want a slot has to be the count rather than the base.
+func TestAllocateAcceptsAFullDataRegionThatSpillsNothing(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{
+			name: "a full region and no spill",
+			cfg:  Config{Scratch: []ic10.Register{13, 14, 15}, SpillSlotBase: ic10.NumMemorySlots},
+		},
+		{
+			name:    "a full region and one spilled value",
+			cfg:     limited(t, 0, 2, ic10.NumMemorySlots),
+			wantErr: "reach past the",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := straightLine(t)
+			res, err := Allocate(b.fn, tt.cfg)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("Allocate succeeded with %+v, want a rejection", res)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error = %q, want it to mention %q", err, tt.wantErr)
+				}
+				// The programmer wrote the array and the expression, so this
+				// reaches the front end's diagnostic output rather than
+				// arriving as a failure of the compiler.
+				if _, ok := source.DiagnosticsIn(err); !ok {
+					t.Errorf("error = %q, want a source diagnostic", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Allocate: %v", err)
+			}
+			if res.SpillSlots != 0 {
+				t.Errorf("allocation took %d spill slots from a full data region, want 0", res.SpillSlots)
+			}
+		})
+	}
+}
+
+// TestAllocateReportsAShortfallAgainstASourceLine holds every rejection the
+// program can cause to naming a line the programmer can open. Both rows are one
+// expression holding more values at once than the file has room for, and a
+// diagnostic with no position renders as a bare dash with nowhere to act on it.
+func TestAllocateReportsAShortfallAgainstASourceLine(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{name: "one scratch register for two spilled operands", cfg: limited(t, 0, 1, 0)},
+		{name: "spill slots past the end of memory", cfg: limited(t, 0, 2, ic10.NumMemorySlots-1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := straightLine(t)
+			res, err := Allocate(b.fn, tt.cfg)
+			if err == nil {
+				t.Fatalf("Allocate succeeded with %+v, want a rejection", res)
+			}
+			diags, ok := source.DiagnosticsIn(err)
+			if !ok {
+				t.Fatalf("error = %q, want a source diagnostic", err)
+			}
+			for _, d := range diags {
+				if !d.Pos.IsValid() {
+					t.Errorf("the rejection carries no source position: %s", d.Error())
+				}
 			}
 		})
 	}

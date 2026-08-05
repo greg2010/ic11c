@@ -15,26 +15,16 @@ type held struct {
 }
 
 // spillScore ranks an interval as a spill candidate: lower is a better victim.
-//
 // The budget that binds is 128 lines, so the quantity to minimise is emitted
-// instructions. Each touch of a spilled value becomes one more of them, a poke
-// or a get db, so touches is the cost of spilling. Span is what spilling buys,
-// since that is how much register pressure it removes.
-// Cost over benefit therefore prefers a long, cold interval to a short, hot
-// one: an induction variable read on every line of a loop stays in a register
-// while a value computed once and read once at the far end of the function
-// goes to memory.
+// instructions — each touch of a spilled value costs one more, and span is the
+// register pressure spilling it relieves.
 func spillScore(iv *interval) float64 {
 	return float64(iv.touches) / float64(iv.span())
 }
 
 // scan is the linear pass: intervals are considered in order of their first
 // live point and each is given a register free for its whole lifetime or sent
-// to memory. There is no interval splitting. Splitting trades a spill for a
-// move, which is one instruction against two, but it also multiplies the
-// bookkeeping, and on a program that fits in three hundred instructions the
-// register file runs out rarely enough that the simpler policy is the one worth
-// having.
+// to memory. There is no interval splitting.
 func scan(intervals []*interval, constrained map[mir.VirtReg]bool, allocatable []ic10.Register, cfg Config) (map[mir.VirtReg]ic10.Register, []*interval, error) {
 	assigned := make(map[mir.VirtReg]ic10.Register)
 	var spilled []*interval
@@ -42,6 +32,9 @@ func scan(intervals []*interval, constrained map[mir.VirtReg]bool, allocatable [
 
 	for _, cur := range intervals {
 		point := cur.start()
+		// Dropping what has ended is a prune and not the test: occupied below
+		// re-asks by intersection, so an interval left in live contributes
+		// nothing once it no longer overlaps.
 		live = slices.DeleteFunc(live, func(h held) bool { return h.iv.end() <= point })
 
 		candidates := allocatable
@@ -67,12 +60,18 @@ func scan(intervals []*interval, constrained map[mir.VirtReg]bool, allocatable [
 		}
 
 		if len(cfg.Scratch) == 0 {
-			return nil, nil, fmt.Errorf("no register is free for %s and no scratch register is configured to spill it into", cur.vreg)
+			// Not a diagnostic: the program did not ask for this. Spilling needs
+			// a scratch register to stage a value through, and Config.Scratch is
+			// the caller's to fill — the shipped pipeline passes
+			// [DefaultScratch] and never reaches here.
+			return nil, nil, fmt.Errorf("Config.Scratch is empty, so there is nowhere to stage a spill of %s through and no register is free to hold it", cur.vreg)
 		}
 
-		// Weighing one interval against the sum for a register is not an exact
-		// instruction count, but it keeps the choice on the right side: taking a
-		// register two live values share has to be worth spilling both.
+		// Summing the victims' scores is an approximation, not an instruction
+		// count, but keeps the choice on the right side: evicting a register held
+		// by two live values has to be worth spilling both. A tie favors the
+		// incumbent — <= rather than < — since eviction spills every occupant
+		// just to place one more.
 		victimReg, victimScore, ok := cheapestVictim(candidates, occupied)
 		if !ok || spillScore(cur) <= victimScore {
 			spilled = append(spilled, cur)
@@ -87,7 +86,6 @@ func scan(intervals []*interval, constrained map[mir.VirtReg]bool, allocatable [
 		live = append(live, held{iv: cur, reg: victimReg})
 	}
 
-	slices.SortFunc(spilled, byStart)
 	return assigned, spilled, nil
 }
 
@@ -126,10 +124,11 @@ func cheapestVictim(candidates []ic10.Register, occupied map[ic10.Register][]*in
 }
 
 // assignSlots hands every spilled interval a data region slot, reusing a slot
-// across intervals that are never live at the same point. Reuse is what keeps
-// the boundary between the data region and the call frames low, and the two
-// share one unprotected array.
-func assignSlots(spilled []*interval, base int) (map[mir.VirtReg]int, int, error) {
+// across intervals that never overlap. It sorts spilled itself: the walk frees
+// a slot once an occupant's interval ends, which is exact only while intervals
+// arrive by start point — otherwise two overlapping values could share a slot
+// and silently miscompute. Capacity is checked by [outOfSlots], not here.
+func assignSlots(spilled []*interval, base int) (map[mir.VirtReg]int, int) {
 	type occupant struct {
 		iv   *interval
 		slot int
@@ -138,7 +137,9 @@ func assignSlots(spilled []*interval, base int) (map[mir.VirtReg]int, int, error
 	var live []occupant
 	count := 0
 
-	for _, iv := range spilled {
+	ordered := slices.Clone(spilled)
+	slices.SortFunc(ordered, byStart)
+	for _, iv := range ordered {
 		point := iv.start()
 		live = slices.DeleteFunc(live, func(o occupant) bool { return o.iv.end() <= point })
 		taken := make(map[int]bool, len(live))
@@ -156,8 +157,5 @@ func assignSlots(spilled []*interval, base int) (map[mir.VirtReg]int, int, error
 		live = append(live, occupant{iv: iv, slot: slot})
 	}
 
-	if base+count > ic10.NumMemorySlots {
-		return nil, 0, fmt.Errorf("spill slots reach %d, past the %d slot memory array", base+count, ic10.NumMemorySlots)
-	}
-	return slots, count, nil
+	return slots, count
 }

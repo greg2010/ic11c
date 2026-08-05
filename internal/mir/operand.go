@@ -11,12 +11,11 @@ import (
 // a runtime value, which both a literal and a register can supply.
 //
 // The chip's help text spells these positions int, num, id, deviceHash,
-// nameHash and slotIndex, but resolves all of them by reading a double. A
-// register is therefore legal in every one of them, which is what makes j ra
-// the documented return sequence even though j is written "j int". The enum
-// positions are not on this list: a logic type, slot type, batch mode or
-// reagent mode is resolved when the line is assembled, so only a literal or a
-// member name will do there.
+// nameHash and slotIndex, but resolves all of them by reading a double, so a
+// register is legal in every one — which is what makes j ra the documented
+// return sequence even though j is written "j int". The enum positions are
+// not on this list: those resolve when the line is assembled, so only a
+// literal or a member name will do.
 func satisfiesValue(kind ic10.OperandKind) bool {
 	switch kind {
 	case ic10.OperandNumber, ic10.OperandInteger, ic10.OperandRefID,
@@ -29,11 +28,9 @@ func satisfiesValue(kind ic10.OperandKind) bool {
 	return false
 }
 
-// Operand is one positional argument of an instruction.
-//
-// The set is closed: implementations live in this package only, because every
-// form has to be renderable by the emitter and rewritable by the register
-// allocator.
+// Operand is one positional argument of an instruction. The set is closed:
+// implementations live in this package only, because every form has to be
+// renderable by the emitter and rewritable by the register allocator.
 type Operand interface {
 	// Satisfies reports whether the operand may appear in a position accepting
 	// kind. Most forms satisfy several kinds, since the machine draws no

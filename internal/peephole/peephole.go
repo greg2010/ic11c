@@ -1,78 +1,36 @@
-// Package peephole rewrites an allocated program where a pair of adjacent
-// instructions computes what one instruction computes.
-//
-// It runs after register allocation because that is the first point either case
-// it covers is visible: both ask whether two operands are the same storage, and
-// a phi becomes copies over virtual registers whose physical registers are the
-// allocator's decision, not selection's. It runs before emission because
-// dropping an instruction moves every line after it and branch targets are
-// absolute line numbers.
-//
-// The cost model is the one the rest of the backend uses. An instruction is one
-// line against a 128 line budget and one execution slot against a 128
-// instruction tick, and a program of a dozen lines can spend a tenth of them on
-// work already done.
-//
-// # Liveness
-//
-// The pass has no liveness information: it sees one block's instruction list
-// and neither the interference graph the allocator built nor a live-out set per
-// block. Every rewrite here is therefore restricted to a shape that needs none.
-// An instruction reading and writing one register kills that register's earlier
-// value whatever happens later in the program, so a rewrite that folds the
-// earlier definition into it is sound without knowing whether the register is
-// live out. The general form — a complement written to a second register, where
-// the first may still be read — is what liveness would be needed for and is not
-// taken.
+// Package peephole rewrites an allocated program where a pair of
+// adjacent instructions computes what one instruction computes. It
+// runs after register allocation, the first point operands are known
+// to be the same physical storage, and before emission, since line numbers matter.
 package peephole
 
 import (
 	"slices"
 
 	"github.com/greg2010/ic11c/internal/ic10"
+	"github.com/greg2010/ic11c/internal/isa"
 	"github.com/greg2010/ic11c/internal/mir"
 )
 
-// complements pairs each set instruction that answers exactly 0 or 1 with the
-// instruction answering its exact complement.
-//
-// docs/target.md records which pairs qualify. The ordered comparisons do not:
-// `slt` and `sge` are both false when either operand is NaN, so neither is the
-// other's negation and folding one into the other would answer 1 where the
-// machine answers 0. Equality, the approximate forms, the device test, and the
-// NaN test are total, and their `z` forms substitute a literal zero operand
-// without changing the predicate.
-//
-// Both members of a pair take the same operands in the same positions, which is
-// what makes rewriting the opcode alone produce a valid instruction rather than
-// one the emitter has to reject.
+// complements pairs each set instruction that answers exactly 0 or 1
+// with the instruction answering its exact complement; docs/target.md
+// records which pairs qualify. Ordered and approximate comparisons are
+// excluded: both answer 0 for a NaN operand, so neither negates the other.
 var complements = map[ic10.Opcode]ic10.Opcode{
-	ic10.OpSeq:   ic10.OpSne,
-	ic10.OpSne:   ic10.OpSeq,
-	ic10.OpSeqz:  ic10.OpSnez,
-	ic10.OpSnez:  ic10.OpSeqz,
-	ic10.OpSap:   ic10.OpSna,
-	ic10.OpSna:   ic10.OpSap,
-	ic10.OpSapz:  ic10.OpSnaz,
-	ic10.OpSnaz:  ic10.OpSapz,
-	ic10.OpSdse:  ic10.OpSdns,
-	ic10.OpSdns:  ic10.OpSdse,
-	ic10.OpSnan:  ic10.OpSnanz,
-	ic10.OpSnanz: ic10.OpSnan,
+	isa.OpSeq:   isa.OpSne,
+	isa.OpSne:   isa.OpSeq,
+	isa.OpSeqz:  isa.OpSnez,
+	isa.OpSnez:  isa.OpSeqz,
+	isa.OpSdse:  isa.OpSdns,
+	isa.OpSdns:  isa.OpSdse,
+	isa.OpSnan:  isa.OpSnanz,
+	isa.OpSnanz: isa.OpSnan,
 }
 
-// Run rewrites prog in place.
-//
-// Identity moves go first so that one sitting between a comparison and the
-// negation of its result does not hide the fold behind it.
-//
-// Blocks are kept even when emptied. A label resolves to the first line at or
-// after the block that carries it, so a branch into a block this emptied still
-// reaches the code that followed it, and removing the block would instead
-// require rewriting every branch that named it.
-//
-// prog must hold no nil function or block, which mir.Program.Validate is what
-// reports. A nil program is a program with nothing to rewrite.
+// Run rewrites prog in place: identity moves and re-test folds first,
+// per block, then the two control-flow rewrites, per function, since
+// those read block layout the earlier rewrites change. prog must hold
+// no nil function, block, or instruction, which [mir.Program.Validate] reports.
 func Run(prog *mir.Program) {
 	if prog == nil {
 		return
@@ -80,41 +38,65 @@ func Run(prog *mir.Program) {
 	for _, fn := range prog.Funcs {
 		for _, block := range fn.Blocks {
 			block.Instrs = slices.DeleteFunc(block.Instrs, isIdentityMove)
-			block.Instrs = foldNegations(block.Instrs)
+			block.Instrs = foldRetests(block.Instrs)
 		}
+		mir.DropFallthroughJumps(fn)
+		invertBranchesOverFallthrough(fn)
 	}
 }
 
-// isIdentityMove reports whether an instruction copies a register onto itself.
-//
-// It asks about physical registers only. Two virtual registers naming the same
-// value are the normal output of phi lowering and are not the same storage
-// until allocation says so.
+// isIdentityMove reports whether an instruction copies a register onto
+// itself. It asks about physical registers only: two virtual registers
+// naming the same value are the normal output of phi lowering and are
+// not the same storage until allocation says so.
 func isIdentityMove(instr *mir.Instr) bool {
-	if instr == nil || instr.Op != ic10.OpMove || len(instr.Args) != 2 {
+	if instr.Op != isa.OpMove {
 		return false
 	}
-	dst, ok := instr.Args[0].(mir.PhysReg)
-	if !ok {
-		return false
-	}
-	src, ok := instr.Args[1].(mir.PhysReg)
+	dst, src, ok := writtenAndRead(instr)
 	return ok && src.Reg == dst.Reg
 }
 
-// foldNegations turns a set instruction whose result the next instruction
-// immediately negates in place into the instruction answering the complement,
-// so that `snan r1 r0; seqz r1 r1` becomes `snanz r1 r0`.
-//
-// Adjacency within one block is what makes this local. A branch target resolves
-// to the start of a block, so no control flow can arrive between two
-// instructions of the same block and observe the value the fold removes.
-func foldNegations(instrs []*mir.Instr) []*mir.Instr {
+// retests are the instructions that ask a value already 0 or 1 for its
+// truth again, mapped to what asking a second time is worth: `seqz`
+// answers the complement, so the definition becomes the complement and
+// the test goes; `snez` answers the value itself, so only the test goes.
+var retests = map[ic10.Opcode]bool{
+	isa.OpSeqz: true,
+	isa.OpSnez: false,
+}
+
+// uncomplementedSets are the set instructions that answer a truth
+// value and have no complement on the machine (see [complements]). The
+// `snez` retest inverts nothing, so these belong to the half of the
+// fold needing a truth value, not a negation.
+var uncomplementedSets = map[ic10.Opcode]bool{
+	isa.OpSlt:  true,
+	isa.OpSltz: true,
+	isa.OpSle:  true,
+	isa.OpSlez: true,
+	isa.OpSgt:  true,
+	isa.OpSgtz: true,
+	isa.OpSge:  true,
+	isa.OpSgez: true,
+	isa.OpSap:  true,
+	isa.OpSna:  true,
+	isa.OpSapz: true,
+	isa.OpSnaz: true,
+}
+
+// foldRetests removes the second of a pair of instructions where a
+// set instruction's result is immediately re-tested in place, so
+// `snan r1 r0; seqz r1 r1` becomes `snanz r1 r0`. Adjacency within one
+// block makes this local: a branch target resolves to the start of a block.
+func foldRetests(instrs []*mir.Instr) []*mir.Instr {
 	kept := instrs[:0]
 	for _, instr := range instrs {
 		if len(kept) > 0 {
-			if def := kept[len(kept)-1]; negatesInPlace(def, instr) {
-				def.Op = complements[def.Op]
+			if def := kept[len(kept)-1]; retestsInPlace(def, instr) {
+				if retests[instr.Op] {
+					def.Op = complements[def.Op]
+				}
 				continue
 			}
 		}
@@ -124,33 +106,118 @@ func foldNegations(instrs []*mir.Instr) []*mir.Instr {
 	return kept
 }
 
-// negatesInPlace reports whether test turns def's result round without reading
-// it anywhere else.
-//
-// It holds for `seqz d d` over a def writing d, and for that shape alone. A
-// `seqz` is `d == 0`, which is the complement exactly when the value tested is
-// already 0 or 1, so def has to be one of the set instructions that answers
-// nothing else. Requiring test's two operands to be def's destination is what
-// removes the liveness question: test overwrites d, so d's old value has no
-// reader after it, and nothing sits between the two to have read it before.
-func negatesInPlace(def, test *mir.Instr) bool {
-	if def == nil || test == nil {
+// retestsInPlace reports whether test asks def's result for its truth
+// again without reading it anywhere else: `seqz d d` or `snez d d`
+// over a def writing d. Requiring both of test's operands to be def's
+// destination removes the liveness question: nothing reads d's old value between the two.
+func retestsInPlace(def, test *mir.Instr) bool {
+	negate, retest := retests[test.Op]
+	if !retest {
 		return false
 	}
-	if _, negatable := complements[def.Op]; !negatable {
+	// The two retests ask different things of the definition. `seqz` leaves the
+	// complement standing in its place, so def has to have one; `snez` leaves def
+	// itself, so a result that is already 0 or 1 is the whole requirement, and the
+	// two tables together are exactly the instructions that answer one.
+	_, complemented := complements[def.Op]
+	if negate && !complemented {
 		return false
 	}
-	if test.Op != ic10.OpSeqz || len(test.Args) != 2 || len(def.Args) == 0 {
+	if !negate && !complemented && !uncomplementedSets[def.Op] {
 		return false
 	}
-	defined, ok := def.Args[0].(mir.PhysReg)
+	defined, ok := writtenReg(def)
 	if !ok {
 		return false
 	}
-	dst, ok := test.Args[0].(mir.PhysReg)
-	if !ok || dst.Reg != defined.Reg {
-		return false
+	dst, src, ok := writtenAndRead(test)
+	return ok && dst.Reg == defined.Reg && src.Reg == defined.Reg
+}
+
+// writtenAndRead is the register a two-operand instruction assigns
+// and the register it reads, and false for one that is not two
+// operands over two physical registers. The read is the operand the
+// write is not, which keeps the two apart under a table that moves the write.
+func writtenAndRead(instr *mir.Instr) (written, read mir.PhysReg, ok bool) {
+	at, placed := writeIndex(instr)
+	if !placed || len(instr.Args) != 2 {
+		return mir.PhysReg{}, mir.PhysReg{}, false
 	}
-	src, ok := test.Args[1].(mir.PhysReg)
-	return ok && src.Reg == defined.Reg
+	written, writes := instr.Args[at].(mir.PhysReg)
+	read, reads := instr.Args[1-at].(mir.PhysReg)
+	return written, read, writes && reads
+}
+
+// writtenReg is the physical register an instruction assigns, and false for one
+// that assigns none, writes something other than a physical register, or is not
+// in the target's operand table at all.
+func writtenReg(instr *mir.Instr) (mir.PhysReg, bool) {
+	at, placed := writeIndex(instr)
+	if !placed {
+		return mir.PhysReg{}, false
+	}
+	reg, ok := instr.Args[at].(mir.PhysReg)
+	return reg, ok
+}
+
+// writeIndex is the operand position an instruction assigns, and
+// false for one that assigns none or is not in the target's operand
+// table. A table that cannot state where an instruction writes is a
+// build defect: allocation asks the same question and has already run.
+func writeIndex(instr *mir.Instr) (int, bool) {
+	info, known := instr.Op.Instruction()
+	if !known {
+		return 0, false
+	}
+	at, err := info.WriteIndex()
+	if err != nil || at < 0 {
+		return 0, false
+	}
+	return at, true
+}
+
+// branchComplements pairs each conditional branch with the branch
+// taken in exactly the cases it is not, for the same reason
+// [complements] pairs set instructions. bnan has no negation on the
+// machine at all. Both members share operand positions, with the target last.
+var branchComplements = map[ic10.Opcode]ic10.Opcode{
+	isa.OpBeq:  isa.OpBne,
+	isa.OpBne:  isa.OpBeq,
+	isa.OpBeqz: isa.OpBnez,
+	isa.OpBnez: isa.OpBeqz,
+	isa.OpBdse: isa.OpBdns,
+	isa.OpBdns: isa.OpBdse,
+}
+
+// invertBranchesOverFallthrough removes the jump from a block ending
+// in a conditional branch to its own fallthrough followed by a jump
+// elsewhere: `bnez r0 L; j M` with L as fallthrough becomes `beqz r0
+// M`. [mir.Block.Succs] is left stale.
+func invertBranchesOverFallthrough(fn *mir.Func) {
+	for i, block := range fn.Blocks {
+		if len(block.Instrs) < 2 {
+			continue
+		}
+		jump := block.Instrs[len(block.Instrs)-1]
+		branch := block.Instrs[len(block.Instrs)-2]
+		if jump.Op != isa.OpJ {
+			continue
+		}
+		fallen, ok := jump.Args[0].(mir.Label)
+		if !ok {
+			continue
+		}
+		complement, invertible := branchComplements[branch.Op]
+		if !invertible {
+			continue
+		}
+		taken, ok := branch.Args[len(branch.Args)-1].(mir.Label)
+		if !ok || !mir.FallsThroughTo(fn, i, taken.Name) {
+			continue
+		}
+		branch.Op = complement
+		branch.Args[len(branch.Args)-1] = fallen
+		clear(block.Instrs[len(block.Instrs)-1:])
+		block.Instrs = block.Instrs[:len(block.Instrs)-1]
+	}
 }

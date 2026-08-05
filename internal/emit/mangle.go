@@ -4,52 +4,38 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/greg2010/ic11c/internal/ic10"
 	"github.com/greg2010/ic11c/internal/mir"
 )
 
-// mangle turns a MIR block label into a name the chip's assembler resolves to
-// our label and to nothing of its own.
-//
-// The chip does not reject a label that shadows one of its own names. It
-// resolves the name to the built-in and every instruction referring to the
-// label then faults at runtime, once per tick, indefinitely. ic10.IsReservedWord
-// covers the whole LogicType, LogicSlotType, batch mode, reagent mode,
-// mnemonic, register, device and constant space, and compares
-// case-insensitively so a differently cased near-miss is still avoided.
-//
-// A name that would start with a digit gains an underscore rather than a
-// letter, because every single letter the assembler might be given is either a
-// mnemonic or a register prefix.
+// mangle turns a MIR block label into a name that reads as one word inside the comment readable
+// output annotates a line with. The name never reaches the chip's assembler — ProgrammableChip cuts
+// a line at its first '#' before splitting it — so this is only about keeping the label on one line:
+// a space would read as two names, a newline would split the line, and non-ASCII would disagree with
+// the character count the editor truncates at. Length is unbounded; a long name can push its line
+// past the 90 character width, but that costs bytes, not the program.
 func mangle(name string) string {
 	var b strings.Builder
 	b.Grow(len(name) + 1)
 	for i := range len(name) {
 		c := name[i]
 		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_':
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
 			b.WriteByte(c)
 		default:
 			b.WriteByte('_')
 		}
 	}
-	out := b.String()
-	if out == "" || (out[0] >= '0' && out[0] <= '9') {
-		out = "_" + out
+	// An empty label would annotate its line with a bare colon, which reads as
+	// a block whose name went missing rather than as one that never had one.
+	if b.Len() == 0 {
+		return "_"
 	}
-	for ic10.IsReservedWord(out) {
-		out += "_"
-	}
-	return out
+	return b.String()
 }
 
-// mangleLabels assigns every block in prog an emitted name, in program order so
-// the assignment is deterministic.
-//
-// Two distinct labels can mangle to the same name, since mangling collapses
-// every character outside the identifier set to an underscore. A collision is
-// resolved by numbering rather than reported, because the label text comes from
-// the front end and a program is not wrong for containing both "a.b" and "a_b".
+// mangleLabels assigns every block in prog an emitted name, in program order so the assignment is
+// deterministic. Two distinct labels can mangle to the same name (mangling collapses every character
+// outside the identifier set to an underscore), so a collision is resolved by numbering rather than reported.
 func mangleLabels(prog *mir.Program) map[string]string {
 	names := make(map[string]string)
 	taken := make(map[string]bool)

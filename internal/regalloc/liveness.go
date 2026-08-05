@@ -30,46 +30,24 @@ func number(fn *mir.Func) (numbering, error) {
 }
 
 // defIndex reports the operand position an instruction writes, or -1 when it
-// writes none.
-//
-// The target's operand table is the only description of direction available:
-// mir carries none. A destination is spelled as a bare, unnamed r? in the
-// game's own help text, and it is always the first operand. Every other
-// register position is named — a, b, address, value, device — and is read. The
-// store forms put an unnamed r? last, which is why the position matters and not
-// just the shape.
-//
-// The two instructions whose bare r? sits elsewhere, alias and label, are
-// assembler directives mir refuses to construct.
+// writes none. mir carries no direction of its own, so the answer comes from
+// the target's instruction table, which tools/isagen generates from the game's
+// own operation classes.
 func defIndex(instr *mir.Instr) (int, error) {
+	if instr == nil {
+		return 0, fmt.Errorf("the block holds a nil instruction")
+	}
 	info, ok := instr.Op.Instruction()
 	if !ok {
 		return 0, fmt.Errorf("opcode %v is not in the instruction table", instr.Op)
 	}
-	if len(info.Operands) == 0 {
-		return -1, nil
-	}
-	first := info.Operands[0]
-	if first.Name != "" || len(first.Kinds) != 1 || first.Kinds[0] != ic10.OperandRegister {
-		return -1, nil
-	}
-	return 0, nil
+	return info.WriteIndex()
 }
 
 // deviceConstrained reports whether an operand position may hold a device
-// reference.
-//
-// A register in one of these positions holds a ReferenceId, and that is the one
-// range restriction the machine imposes on a register: it resolves within r0
-// through r15 only, so a virtual register reaching such a position cannot be
-// given sp or ra even when the calling convention leaves them free. Indirect
-// referencing is not the reason — an rr form is bounded by the whole 18 entry
-// register array and reaches sp and ra quite happily.
-//
-// No pattern in internal/isel puts a register in one of these positions yet:
-// every device operand it builds is a d0 through d5 pin or db. The check is
-// what keeps the first one that does from being handed a register the chip
-// cannot resolve.
+// reference. Such a position holds a ReferenceId, which the machine resolves
+// within r0 through r15 only — so a register reaching one cannot be sp or ra
+// even when the calling convention leaves them free.
 func deviceConstrained(instr *mir.Instr, index int) bool {
 	info, ok := instr.Op.Instruction()
 	if !ok || index >= len(info.Operands) {
@@ -84,13 +62,9 @@ func deviceConstrained(instr *mir.Instr, index int) bool {
 }
 
 // liveness is the classic backward set problem, iterated to a fixed point over
-// the successor edges mir records.
-//
-// A fixed point rather than a single pass over a block ordering is what makes a
-// back edge come out exact. A value defined in a loop body and read at the top
-// of the next iteration is live out of the latch, so it needs no separate loop
-// extension, and a value live in two blocks that layout order separates keeps
-// the hole between them instead of being widened to cover it.
+// the successor edges mir records. A fixed point is what makes a back edge
+// come out exact: a value read at the top of a loop is live out of the latch
+// without a separate loop extension.
 type liveness struct {
 	in  []map[mir.VirtReg]bool
 	out []map[mir.VirtReg]bool
@@ -238,8 +212,18 @@ func buildIntervals(fn *mir.Func, nums numbering) ([]*interval, map[mir.VirtReg]
 
 	intervals := make([]*interval, 0, len(byVreg))
 	for _, iv := range byVreg {
+		// A safety net rather than a reachable case: each arm above records a
+		// range before touching alive[v], so span() must be nonzero. See
+		// [interval.start] for why zero would matter.
+		if iv.span() == 0 {
+			return nil, nil, fmt.Errorf("%s was given an interval covering no program point", iv.vreg)
+		}
 		intervals = append(intervals, iv)
 	}
+	// Map order leaves here as allocation's order, which decides every register,
+	// spill victim and spill slot index. slices.SortFunc is unstable, so
+	// determinism holds only while byStart is a total order — enforced by
+	// TestByStartIsATotalOrder.
 	slices.SortFunc(intervals, byStart)
 	return intervals, constrained, nil
 }

@@ -1,9 +1,54 @@
 package regalloc
 
 import (
+	"reflect"
 	"slices"
 	"testing"
+
+	"github.com/greg2010/ic11c/internal/mir"
 )
+
+// TestByStartIsATotalOrder is what keeps the emitted program a function of its
+// input. buildIntervals collects intervals in map order and hands them to an
+// unstable sort, so a pair byStart returned zero for would let map traversal
+// decide every register, every spill victim and every spill slot index.
+func TestByStartIsATotalOrder(t *testing.T) {
+	if got := reflect.TypeFor[mir.VirtReg]().NumField(); got != 1 {
+		t.Errorf("mir.VirtReg has %d fields and byStart separates on ID alone; give byStart the new field or intervals will tie", got)
+	}
+
+	at := func(start int, id uint32) *interval {
+		return &interval{vreg: mir.VirtReg{ID: id}, ranges: []liveRange{{from: start, to: start + 2}}}
+	}
+	tests := []struct {
+		name string
+		a, b *interval
+		want int
+	}{
+		{name: "an earlier start comes first", a: at(2, 9), b: at(6, 0), want: -1},
+		{name: "a later start comes second", a: at(6, 0), b: at(2, 9), want: 1},
+		{name: "a tied start falls to the lower id", a: at(4, 1), b: at(4, 2), want: -1},
+		{name: "a tied start is antisymmetric", a: at(4, 2), b: at(4, 1), want: 1},
+		{name: "an interval orders with itself", a: at(4, 1), b: at(4, 1), want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := byStart(tt.a, tt.b); sign(got) != tt.want {
+				t.Errorf("byStart = %d, want sign %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func sign(n int) int {
+	switch {
+	case n < 0:
+		return -1
+	case n > 0:
+		return 1
+	}
+	return 0
+}
 
 func TestIntervalAddRange(t *testing.T) {
 	tests := []struct {
@@ -42,7 +87,6 @@ func TestIntervalSetFrom(t *testing.T) {
 		want  []liveRange
 	}{
 		{name: "shortens the first range", adds: []liveRange{{2, 10}}, point: 5, want: []liveRange{{5, 10}}},
-		{name: "a definition nothing reads gets its own range", point: 5, want: []liveRange{{5, 6}}},
 		{name: "later ranges are untouched", adds: []liveRange{{8, 10}, {2, 4}}, point: 3, want: []liveRange{{3, 4}, {8, 10}}},
 	}
 	for _, tt := range tests {

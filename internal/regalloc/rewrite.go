@@ -5,7 +5,9 @@ import (
 	"slices"
 
 	"github.com/greg2010/ic11c/internal/ic10"
+	"github.com/greg2010/ic11c/internal/isa"
 	"github.com/greg2010/ic11c/internal/mir"
+	"github.com/greg2010/ic11c/internal/source"
 )
 
 // argWrite is a deferred operand replacement. Rewriting is planned before any
@@ -39,11 +41,11 @@ func planRewrite(fn *mir.Func, res Result, scratch []ic10.Register, saves map[*m
 		for _, instr := range block.Instrs {
 			reloads, stores, err := p.planInstr(instr, res, scratch)
 			if err != nil {
-				return nil, fmt.Errorf("block %s: %s: %w", block.Label, instr, err)
+				return nil, locate(block, instr, err)
 			}
 			pushes, pops, err := p.planCallSaves(instr, saves[instr])
 			if err != nil {
-				return nil, fmt.Errorf("block %s: %s: %w", block.Label, instr, err)
+				return nil, locate(block, instr, err)
 			}
 			instrs = append(instrs, pushes...)
 			instrs = append(instrs, reloads...)
@@ -56,13 +58,31 @@ func planRewrite(fn *mir.Func, res Result, scratch []ic10.Register, saves map[*m
 	return p, nil
 }
 
+// locate names the block and the instruction a planning failure came from. A
+// diagnostic passes through untouched: it already carries the line the
+// programmer acts on, and wrapping it would bury that behind a block label the
+// source doesn't have.
+func locate(block *mir.Block, instr *mir.Instr, err error) error {
+	if _, ok := source.DiagnosticsIn(err); ok {
+		return err
+	}
+	return fmt.Errorf("block %s: %s: %w", block.Label, instr, err)
+}
+
+// shortfall reports an instruction the scratch set cannot serve, as a
+// diagnostic against the line rather than an internal error, the same way
+// [outOfSlots] is: an expression that wants more scratch registers than are
+// held back is the source's problem, not the compiler's.
+func shortfall(instr *mir.Instr, format string, args ...any) error {
+	var diags source.DiagnosticList
+	diags.Addf(instr.Pos, format, args...)
+	return diags.Err()
+}
+
 // around builds one instruction of the spill or call-frame code that surrounds
-// at, carrying at's source position and the calls it was reached through.
-//
-// The inline chain is what the size report attributes bytes by. Code inserted
-// around an instruction of an inlined body belongs to the call that spliced the
-// body in; without the chain it is charged to the enclosing function instead,
-// which is the one unit the report exists to avoid.
+// at, carrying at's source position and inline chain — the size report
+// attributes bytes by that chain, so spill code inside an inlined body must be
+// charged to the call that spliced the body in, not the enclosing function.
 func around(at *mir.Instr, op ic10.Opcode, args ...mir.Operand) (*mir.Instr, error) {
 	instr, err := mir.NewInstr(op, at.Pos, args...)
 	if err != nil {
@@ -73,62 +93,51 @@ func around(at *mir.Instr, op ic10.Opcode, args ...mir.Operand) (*mir.Instr, err
 }
 
 // callSaves lists, per call, the registers holding a value the call must not
-// destroy.
-//
-// Every register is caller saved. The callee's allocation is decided
-// separately and no clobber set crosses between the two, so a value the caller
-// still wants after the call goes to the frame around it. push and pop are one
-// instruction each and neither needs an address operand, which is what makes
-// this cheaper than the poke and get db pair an ordinary spill costs.
-//
-// The set comes from the live intervals rather than from the assignment, so a
-// value the call is the last reader of costs nothing: it is dead at the point
-// the call returns to.
-func callSaves(fn *mir.Func, intervals []*interval, assigned map[mir.VirtReg]ic10.Register) map[*mir.Instr][]ic10.Register {
+// destroy. Every register is caller saved, so a value the caller still wants
+// afterward goes to the frame push/pop builds around the call rather than to
+// an ordinary spill. The set is read from the live intervals, not the
+// assignment, so a value the call is the last reader of costs nothing.
+func callSaves(fn *mir.Func, nums numbering, intervals []*interval, assigned map[mir.VirtReg]ic10.Register) map[*mir.Instr][]ic10.Register {
 	saves := make(map[*mir.Instr][]ic10.Register)
-	index := 0
-	for _, instr := range fn.AllInstrs() {
-		point := index
-		index++
-		if instr.Op != ic10.OpJal {
-			continue
-		}
-		var regs []ic10.Register
-		for _, iv := range intervals {
-			reg, held := assigned[iv.vreg]
-			if !held || !iv.covers(defPoint(point)) {
+	for b, block := range fn.Blocks {
+		for i, instr := range block.Instrs {
+			if !ic10.LinksReturn(instr.Op) {
 				continue
 			}
-			regs = append(regs, reg)
+			point := nums.first[b] + i
+			var regs []ic10.Register
+			for _, iv := range intervals {
+				reg, held := assigned[iv.vreg]
+				if !held || !iv.covers(defPoint(point)) {
+					continue
+				}
+				regs = append(regs, reg)
+			}
+			if len(regs) == 0 {
+				continue
+			}
+			slices.Sort(regs)
+			saves[instr] = regs
 		}
-		if len(regs) == 0 {
-			continue
-		}
-		slices.Sort(regs)
-		saves[instr] = slices.Compact(regs)
 	}
 	return saves
 }
 
-// planCallSaves builds the frame one call needs around it.
-//
-// The pops mirror the pushes, because pop decrements sp before its bounds
-// check and does not roll the decrement back: an unbalanced pair walks sp
-// downward into the data region one slot per tick with nothing trapping.
-//
-// The argument registers a call writes are not in the set: allocation withholds
-// every physical register the input names for the whole function, so no value
-// of the caller is living in one.
+// planCallSaves builds the frame one call needs around it. The pops must
+// mirror the pushes exactly: pop lowers sp and bounds-checks after, so an
+// unmatched pop silently restores a register from a slot holding a global and
+// only faults with StackUnderFlow once sp walks below slot zero — long after
+// the damage.
 func (p *plan) planCallSaves(instr *mir.Instr, regs []ic10.Register) (pushes, pops []*mir.Instr, err error) {
 	for _, reg := range regs {
-		save, err := around(instr, ic10.OpPush, mir.PhysReg{Reg: reg})
+		save, err := around(instr, isa.OpPush, mir.PhysReg{Reg: reg})
 		if err != nil {
 			return nil, nil, fmt.Errorf("saving %s across the call: %w", reg, err)
 		}
 		pushes = append(pushes, save)
 	}
 	for i := len(regs) - 1; i >= 0; i-- {
-		restore, err := around(instr, ic10.OpPop, mir.PhysReg{Reg: regs[i]})
+		restore, err := around(instr, isa.OpPop, mir.PhysReg{Reg: regs[i]})
 		if err != nil {
 			return nil, nil, fmt.Errorf("restoring %s across the call: %w", regs[i], err)
 		}
@@ -137,47 +146,91 @@ func (p *plan) planCallSaves(instr *mir.Instr, regs []ic10.Register) (pushes, po
 	return pushes, pops, nil
 }
 
+// spilledReads lists the distinct spilled virtual registers instr reads, in
+// the order its operands name them. Its length is how many scratch registers
+// the instruction needs, since every reload must survive until all of them are
+// read. The same walk backs both [scratchDemand] and [planInstr], so the
+// scratch held back cannot disagree with what gets spent.
+func spilledReads(instr *mir.Instr, def int, spilled func(mir.VirtReg) bool) []mir.VirtReg {
+	var reads []mir.VirtReg
+	for j, arg := range instr.Args {
+		v, ok := arg.(mir.VirtReg)
+		if !ok || j == def || !spilled(v) || slices.Contains(reads, v) {
+			continue
+		}
+		reads = append(reads, v)
+	}
+	return reads
+}
+
+// writesSpilled reports whether instr's result goes to memory, which needs one
+// register to stage the write through.
+func writesSpilled(instr *mir.Instr, def int, spilled func(mir.VirtReg) bool) bool {
+	if def < 0 || def >= len(instr.Args) {
+		return false
+	}
+	v, isVirtual := instr.Args[def].(mir.VirtReg)
+	return isVirtual && spilled(v)
+}
+
+// scratchDemand is the most scratch registers any single instruction of fn
+// will need once the given values are in memory. The requirement is per
+// instruction, not per function, which is what lets allocation hold back what
+// one line wants rather than the whole configured set.
+func scratchDemand(fn *mir.Func, spilled func(mir.VirtReg) bool) (int, error) {
+	most := 0
+	for block, instr := range fn.AllInstrs() {
+		def, err := defIndex(instr)
+		if err != nil {
+			return 0, fmt.Errorf("block %s: %w", block.Label, err)
+		}
+		need := len(spilledReads(instr, def, spilled))
+		if writesSpilled(instr, def, spilled) {
+			need = max(need, 1)
+		}
+		most = max(most, need)
+	}
+	return most, nil
+}
+
 // planInstr records the operand replacements one instruction needs and returns
-// the spill code that must surround it.
-//
-// Sources are handled before the destination so that a spilled destination can
-// take a scratch register a source has already borrowed: the machine reads
-// every operand before it writes the result, so the reload the scratch holds is
-// dead by the time the result lands in it.
+// the spill code that must surround it. Sources are handled before the
+// destination so a spilled destination can reuse a scratch register a source
+// already borrowed: the machine reads every operand before it writes the
+// result, so the reload is dead by the time the result lands.
 func (p *plan) planInstr(instr *mir.Instr, res Result, scratch []ic10.Register) (reloads, stores []*mir.Instr, err error) {
 	def, err := defIndex(instr)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	borrowed := make(map[mir.VirtReg]ic10.Register)
-	next := 0
+	spilled := func(v mir.VirtReg) bool { _, inMemory := res.spilled[v]; return inMemory }
+	reads := spilledReads(instr, def, spilled)
+	if len(reads) > len(scratch) {
+		return nil, nil, shortfall(instr, "this line reads %s and the configuration holds back %s to reload them into, so one reload would overwrite another before the instruction read it; an instruction needs one scratch register per distinct spilled operand it reads",
+			source.Plural(len(reads), "distinct spilled operand"), source.Plural(len(scratch), "scratch register"))
+	}
+	borrowed := make(map[mir.VirtReg]ic10.Register, len(reads))
+	for i, v := range reads {
+		reg := scratch[i]
+		borrowed[v] = reg
+		reload, err := around(instr, isa.OpGet, mir.PhysReg{Reg: reg}, mir.NewDeviceBase(), mir.Imm{Value: float64(res.spilled[v])})
+		if err != nil {
+			return nil, nil, fmt.Errorf("reloading %s from slot %d: %w", v, res.spilled[v], err)
+		}
+		reloads = append(reloads, reload)
+	}
+
 	for j, arg := range instr.Args {
 		v, ok := arg.(mir.VirtReg)
 		if !ok || j == def {
 			continue
 		}
-		if reg, ok := res.assigned[v]; ok {
-			p.writes = append(p.writes, argWrite{instr: instr, index: j, operand: mir.PhysReg{Reg: reg}})
-			continue
-		}
-		slot, ok := res.spilled[v]
-		if !ok {
-			return nil, nil, fmt.Errorf("%s was neither assigned a register nor a spill slot", v)
-		}
-		reg, held := borrowed[v]
-		if !held {
-			if next >= len(scratch) {
-				return nil, nil, fmt.Errorf("reads %d distinct spilled operands; only %d scratch registers are configured", next+1, len(scratch))
+		reg, placed := res.assigned[v]
+		if !placed {
+			if reg, placed = borrowed[v]; !placed {
+				return nil, nil, fmt.Errorf("%s was neither assigned a register nor a spill slot", v)
 			}
-			reg = scratch[next]
-			next++
-			borrowed[v] = reg
-			reload, err := around(instr, ic10.OpGet, mir.PhysReg{Reg: reg}, mir.NewDeviceBase(), mir.Imm{Value: float64(slot)})
-			if err != nil {
-				return nil, nil, fmt.Errorf("reloading %s from slot %d: %w", v, slot, err)
-			}
-			reloads = append(reloads, reload)
 		}
 		p.writes = append(p.writes, argWrite{instr: instr, index: j, operand: mir.PhysReg{Reg: reg}})
 	}
@@ -199,13 +252,14 @@ func (p *plan) planInstr(instr *mir.Instr, res Result, scratch []ic10.Register) 
 	}
 	reg, held := borrowed[v]
 	if !held {
-		if len(scratch) == 0 {
-			return nil, nil, fmt.Errorf("writes spilled %s but no scratch register is configured", v)
-		}
+		// scratch holds at least one register here: writing a spilled value
+		// makes scratchDemand answer one or more, allocation reserves that many,
+		// and scan refuses to spill anything at all without a register to stage
+		// it through.
 		reg = scratch[0]
 	}
 	p.writes = append(p.writes, argWrite{instr: instr, index: def, operand: mir.PhysReg{Reg: reg}})
-	store, err := around(instr, ic10.OpPoke, mir.Imm{Value: float64(slot)}, mir.PhysReg{Reg: reg})
+	store, err := around(instr, isa.OpPoke, mir.Imm{Value: float64(slot)}, mir.PhysReg{Reg: reg})
 	if err != nil {
 		return nil, nil, fmt.Errorf("spilling %s to slot %d: %w", v, slot, err)
 	}

@@ -42,7 +42,9 @@ func TestOperandString(t *testing.T) {
 }
 
 // TestOperandSatisfies pins which instruction table positions each operand form
-// may occupy. NewInstr is only as good as this mapping.
+// may occupy; NewInstr is only as good as this mapping. Every kind is asked of
+// every form, so OperandString is pinned too: the bare word alias, define and
+// label take has no MIR form, which is what makes those three unrepresentable.
 func TestOperandSatisfies(t *testing.T) {
 	every := []ic10.OperandKind{
 		ic10.OperandRegister, ic10.OperandNumber, ic10.OperandInteger, ic10.OperandDevice,
@@ -82,21 +84,6 @@ func TestOperandSatisfies(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestNoOperandSatisfiesString is what makes alias, define and label
-// unrepresentable independently of the pseudo-op table: the bare word operand
-// they take has no MIR form.
-func TestNoOperandSatisfiesString(t *testing.T) {
-	ops := []Operand{
-		VirtReg{}, PhysReg{}, Imm{}, Label{},
-		NewDeviceBase(), LogicType{}, LogicSlotType{}, BatchMode{}, ReagentMode{},
-	}
-	for _, op := range ops {
-		if op.Satisfies(ic10.OperandString) {
-			t.Errorf("%s satisfies OperandString", op)
-		}
 	}
 }
 

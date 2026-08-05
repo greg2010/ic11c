@@ -1,20 +1,5 @@
 // Package regalloc rewrites a mir.Func from virtual registers to physical ones
 // by linear scan over live intervals, spilling to the data region.
-//
-// The cost model is instructions. A program may hold 128 lines and 4096 bytes,
-// so a line would have to average 32 bytes for the byte cap to be reached
-// first, and a real instruction is far shorter than that: the line count is
-// what binds. Every choice here counts emitted instructions
-// first and their width second. That is why a spill is a poke and a get db
-// rather than a push and a pop, and why the spill heuristic weighs an
-// interval's touch count against the span it would free. Preferring low
-// numbered registers over high ones is the one width-directed choice, and it
-// is free when the instruction count is equal.
-//
-// sp and ra are ordinary registers with no hardware protection. Whether they
-// are allocatable depends on whether the calling convention is in use, which is
-// a decision made elsewhere, so the reservation set arrives in Config rather
-// than being fixed here.
 package regalloc
 
 import (
@@ -23,7 +8,9 @@ import (
 	"slices"
 
 	"github.com/greg2010/ic11c/internal/ic10"
+	"github.com/greg2010/ic11c/internal/isa"
 	"github.com/greg2010/ic11c/internal/mir"
+	"github.com/greg2010/ic11c/internal/source"
 )
 
 // Config parameterises allocation. The zero value reserves nothing and holds
@@ -31,54 +18,27 @@ import (
 // the register file.
 type Config struct {
 	// Reserved names registers no virtual register may be given. sp and ra
-	// belong here when the calling convention is in use and nowhere when it is
-	// not. Registers already named by a physical operand in the input are
-	// reserved in addition to these.
+	// belong here whenever the calling convention is in use.
 	Reserved []ic10.Register
 	// Scratch names registers to reload spilled operands into. Every entry must
-	// be within r0 through r15: a reload can land in a device reference
-	// position, and only those registers may hold one.
-	//
-	// They are held back from allocation only for a function that spills, since
-	// a function whose values all fit in registers reloads nothing. Allocate
-	// therefore hands out the whole file first and reserves these only if that
-	// was not enough.
-	//
-	// One scratch register serves an instruction that reads at most one spilled
-	// operand. Allocate reports the shortfall by instruction when more are
-	// needed, rather than emitting code that silently reuses one. Nothing is
-	// spent on address computation: a spill slot is a compile time constant, so
-	// poke and get db take it as a literal.
+	// be within r0 through r15, since a reload can land in a device reference
+	// position and only those registers may hold one. It is a ceiling: a
+	// function that spills gives up only as many as its widest line reads.
 	Scratch []ic10.Register
-	// SpillSlotBase is the first data region slot spill slots may occupy. Slots
-	// below it hold globals, arrays and address taken locals.
+	// SpillSlotBase is the first data region slot spill slots may occupy. The
+	// caller advances it by Result.SpillSlots after each function, since one
+	// flat array holds every function's spill slots and none crosses a function
+	// boundary to say a slot came free.
 	SpillSlotBase int
 }
 
-// DefaultScratch is the scratch set a whole program is allocated against.
-//
-// Three, because three register-capable sources is the widest an instruction
-// selection emits reads, and an instruction needs one scratch register per
-// distinct spilled source it reads. select, clamp and lerp read three and write
-// a result, lbns reads three and writes one, and sbn and sbs read three and
-// write nothing at all. The store forms are the shape with no slack: a spilled
-// destination costs no fourth register, because planInstr lets it take back one
-// a source already borrowed, and an instruction with no destination is given
-// none of that. Both shapes still fit in three.
-//
-// Fewer is reported as a shortfall by Allocate rather than worked around, which
-// is what makes the number a size choice rather than a correctness one. It does
-// not grow with how much a function spills: the requirement is per instruction.
-//
-// They are the highest numbered general registers, which is where allocation
-// reaches last within a name width: r10 through r15 all render in three
-// characters, so which three of those six are held back costs nothing.
-//
-// Each call returns a fresh slice, so a caller may extend or reorder it.
+// DefaultScratch is the scratch set a whole program is allocated against: the
+// top three general registers. Three is the most register-capable sources any
+// selected instruction reads; that no calling-convention register lands among
+// them is enforced by a test in internal/isel. Each call returns a fresh slice.
 func DefaultScratch() []ic10.Register {
-	// Spelled against the general register count rather than as literals, so
-	// that a file of a different width moves the set with it and leaves both
-	// the argument above and checkPinned's disjointness argument true.
+	// Spelled against the general register count rather than as a literal, so
+	// that a file of a different width moves the set with it.
 	const top = ic10.NumGeneralRegisters - 1
 	return []ic10.Register{top - 2, top - 1, top}
 }
@@ -91,13 +51,9 @@ type Result struct {
 	// SpillSlotBase+SpillSlots.
 	SpillSlots int
 	// assigned maps each virtual register that lives in a register to it, and
-	// spilled maps each of the rest to its absolute data region slot, already
-	// offset by Config.SpillSlotBase. The two are disjoint: an interval either
-	// keeps a register for its whole lifetime or lives in memory, since this
-	// allocator does not split.
-	//
-	// They are the rewriter's working state rather than an answer for a caller,
-	// which is why they leave the package only as the code that was emitted.
+	// spilled maps each of the rest to its absolute data region slot, offset by
+	// Config.SpillSlotBase. The two are disjoint: this allocator does not split,
+	// so an interval either keeps a register for its whole lifetime or spills.
 	assigned map[mir.VirtReg]ic10.Register
 	spilled  map[mir.VirtReg]int
 }
@@ -106,13 +62,10 @@ type Result struct {
 // a physical one and inserting spill code where the register file did not
 // suffice.
 //
-// It accepts a function in mir.RegFormVirtual or mir.RegFormMixed form and
-// leaves it in mir.RegFormPhysical or mir.RegFormEmpty form. A physical
-// register already named in the input is reserved for its original purpose over
-// the whole function, since the input carries no live range for it.
-//
-// fn is unchanged when an error is returned: the rewrite is planned in full and
-// applied only once every instruction is known to be expressible.
+// It accepts mir.RegFormVirtual or mir.RegFormMixed and leaves
+// mir.RegFormPhysical or mir.RegFormEmpty. fn is unchanged when an error is
+// returned: the rewrite is planned in full and applied only once every
+// instruction is known to be expressible.
 func Allocate(fn *mir.Func, cfg Config) (Result, error) {
 	if fn == nil {
 		return Result{}, fmt.Errorf("regalloc: function is nil")
@@ -134,51 +87,62 @@ func Allocate(fn *mir.Func, cfg Config) (Result, error) {
 	if err := cfg.checkPinned(pinned); err != nil {
 		return Result{}, fmt.Errorf("regalloc: %s: %w", fn.Name, err)
 	}
+	if err := cfg.checkCalls(fn, pinned); err != nil {
+		return Result{}, fmt.Errorf("regalloc: %s: %w", fn.Name, err)
+	}
 
-	assigned, spilled, err := cfg.allocateRegisters(intervals, constrained, pinned)
+	assigned, spilled, scratch, err := cfg.allocateRegisters(fn, intervals, constrained, pinned)
 	if err != nil {
 		return Result{}, fmt.Errorf("regalloc: %s: %w", fn.Name, err)
 	}
-	slots, count, err := assignSlots(spilled, cfg.SpillSlotBase)
-	if err != nil {
-		return Result{}, fmt.Errorf("regalloc: %s: %w", fn.Name, err)
+	slots, count := assignSlots(spilled, cfg.SpillSlotBase)
+	if err := outOfSlots(fn, cfg.SpillSlotBase, count); err != nil {
+		return Result{}, err
 	}
 
 	res := Result{SpillSlots: count, assigned: assigned, spilled: slots}
-	plan, err := planRewrite(fn, res, cfg.Scratch, callSaves(fn, intervals, assigned))
+	plan, err := planRewrite(fn, res, scratch, callSaves(fn, nums, intervals, assigned))
 	if err != nil {
+		if _, ok := source.DiagnosticsIn(err); ok {
+			return Result{}, err
+		}
 		return Result{}, fmt.Errorf("regalloc: %s: %w", fn.Name, err)
 	}
 	plan.apply()
 	return res, nil
 }
 
+// outOfSlots reports a function whose spill slots would reach past the memory
+// array, as a diagnostic against the function rather than as a failure of this
+// package: the source declared more live at once than the register file and
+// the array below base have room for, which the programmer can act on.
+func outOfSlots(fn *mir.Func, base, count int) error {
+	if base+count <= ic10.NumMemorySlots {
+		return nil
+	}
+	var diags source.DiagnosticList
+	diags.Addf(fn.Pos, "'%s' holds more values at once than the register file has room for, and the %s it would spill into reach past the %d slot memory array, of which %s already hold globals, arrays, address-taken locals and what other functions spilled; shorten an array, drop a global, or split the expression so that fewer values are live at once",
+		fn.Name, source.Plural(count, "slot"), ic10.NumMemorySlots, source.Plural(base, "slot"))
+	return diags.Err()
+}
+
 // SetStackBase prepends to the entry point the instruction that puts sp above
-// the data region.
-//
-// The data region and the call frames share one 512 slot array with nothing
-// between them: a frame that reaches a slot a global occupies overwrites it and
-// nothing traps, and a poke into a frame corrupts a return address the same
-// way. Keeping the two apart is this package's job, and base is the far side of
-// the spill slots it just handed out.
-//
-// base is the first slot a frame may take, so it has to leave at least one.
-// push writes at sp and advances afterwards, which makes a base of 511 a stack
-// of exactly one value and a base of 512 a stack with nowhere to put the first.
-// How much headroom is enough beyond that is not decidable here: frame depth is
-// data-dependent for a recursive program, and the size report states what is
-// left rather than pretending a number is safe.
-//
-// Chip state survives power loss, chip removal, and reflashing, so sp holds
-// whatever the last program to run left in it. Nothing may push before this.
+// the data region, which shares one 512-slot array with the call stack and
+// leaves nothing between them. Chip state survives reflashing, so sp holds
+// whatever the last program left there — nothing may push before this runs.
 func SetStackBase(entry *mir.Func, base int) error {
 	if entry == nil || len(entry.Blocks) == 0 {
 		return fmt.Errorf("regalloc: the entry function has no block to set sp in")
 	}
-	if base < 0 || base >= ic10.NumMemorySlots {
-		return fmt.Errorf("regalloc: a stack base of %d leaves no slot of the %d for a call frame", base, ic10.NumMemorySlots)
+	if base < 0 || base > ic10.NumMemorySlots {
+		return fmt.Errorf("regalloc: a stack base of %d is outside the %d slot memory array", base, ic10.NumMemorySlots)
 	}
-	set, err := mir.NewInstr(ic10.OpMove, entry.Pos, mir.PhysReg{Reg: ic10.RegSP}, mir.Imm{Value: float64(base)})
+	if base == ic10.NumMemorySlots {
+		var diags source.DiagnosticList
+		diags.Addf(entry.Pos, "the globals, arrays, address-taken locals and spilled values fill all %d memory slots, leaving no slot above them for the call stack to start at; shorten an array, drop a global, or split an expression so that fewer values are live at once", ic10.NumMemorySlots)
+		return diags.Err()
+	}
+	set, err := mir.NewInstr(isa.OpMove, entry.Pos, mir.PhysReg{Reg: ic10.RegSP}, mir.Imm{Value: float64(base)})
 	if err != nil {
 		return fmt.Errorf("regalloc: setting sp to %d: %w", base, err)
 	}
@@ -204,25 +168,16 @@ func (c Config) validate() error {
 		}
 		seen[r] = "scratch"
 	}
-	if c.SpillSlotBase < 0 || c.SpillSlotBase >= ic10.NumMemorySlots {
+	if c.SpillSlotBase < 0 || c.SpillSlotBase > ic10.NumMemorySlots {
 		return fmt.Errorf("spill slot base %d is outside the %d slot data region", c.SpillSlotBase, ic10.NumMemorySlots)
 	}
 	return nil
 }
 
-// checkPinned refuses a scratch register the input already names.
-//
-// A physical register in the input carries no live range here, which is why
-// preassigned withholds it for the whole function. Reloading a spilled operand
-// into one would write over a value nothing in this package can see is live,
-// and the write is silent: the reload assembles, runs, and leaves a different
-// number where a call argument or a result was.
-//
-// Config.validate cannot answer this. Which registers the input pins is a
-// property of the function, so the two sets only meet once one is in hand. The
-// caller is what has to keep them apart, and today does: the convention in
-// internal/isel passes arguments in r0 upward and returns in r0, and
-// DefaultScratch takes the top of the file.
+// checkPinned refuses a scratch register the input already names: reloading a
+// spilled operand into one would silently overwrite a value this package
+// cannot see is live. internal/isel enforces by test that [DefaultScratch]
+// never collides with a calling convention's pinned registers.
 func (c Config) checkPinned(pinned map[ic10.Register]bool) error {
 	for _, r := range c.Scratch {
 		if pinned[r] {
@@ -232,40 +187,100 @@ func (c Config) checkPinned(pinned map[ic10.Register]bool) error {
 	return nil
 }
 
-// allocateRegisters places every interval, holding the scratch set back only if
-// the whole register file was not enough.
-//
-// Scratch is spent on reloading a spilled operand, so a function that spills
-// nothing has no use for it, and reserving it up front would start spilling
-// len(Scratch) values early.
-//
-// Two passes are all it takes. The second cannot in turn need more scratch than
-// it reserved, because the requirement is per instruction — one register per
-// distinct spilled source that instruction reads — and does not grow with how
-// much the function spilled. An instruction reading more spilled sources than
-// there are scratch registers is reported by planInstr, which is the same answer
-// a single pass would have given.
-func (c Config) allocateRegisters(intervals []*interval, constrained map[mir.VirtReg]bool, pinned map[ic10.Register]bool) (map[mir.VirtReg]ic10.Register, []*interval, error) {
-	assigned, spilled, err := scan(intervals, constrained, c.allocatable(pinned), c)
-	if err != nil || len(spilled) == 0 {
-		return assigned, spilled, err
+// checkCalls refuses a configuration that leaves sp or ra allocatable in a
+// function that makes a call: a link opcode writes ra and the frame this
+// package wraps a call in moves sp, and no operand of either names the
+// register, so nothing else keeps allocation off them.
+func (c Config) checkCalls(fn *mir.Func, pinned map[ic10.Register]bool) error {
+	free := c.allocatable(pinned)
+	for _, reg := range clobberedByCalls(fn) {
+		if slices.Contains(free, reg) {
+			return fmt.Errorf("this function makes a call and %s is left allocatable, so a value would be placed in the register the call writes or the frame moves; reserve sp and ra whenever the calling convention is in use", reg)
+		}
 	}
-	held := make(map[ic10.Register]bool, len(pinned)+len(c.Scratch))
-	maps.Copy(held, pinned)
-	for _, r := range c.Scratch {
-		held[r] = true
-	}
-	return scan(intervals, constrained, c.allocatable(held), c)
+	return nil
 }
 
-// allocatable orders the registers a virtual register may be given by the bytes
-// they cost to render, so r0 through r9 and the two character sp and ra are
-// handed out before r10 through r15. On a 4096 byte budget a register name
-// appearing on a hundred lines is a hundred bytes.
-//
-// blocked names what allocation may not reach beyond Config.Reserved: the
-// registers the input already pins, and the scratch set once a first pass has
-// shown the function spills.
+// clobberedByCalls lists the registers a call in fn writes without naming one
+// in an operand, plus those the frame this package wraps it in writes the same
+// way. The set is read from [ic10.Instruction.Implicit] rather than spelled
+// here, so it moves with the instruction table.
+func clobberedByCalls(fn *mir.Func) []ic10.Register {
+	var regs []ic10.Register
+	reached := func(op ic10.Opcode) {
+		info, known := op.Instruction()
+		if !known {
+			return
+		}
+		for _, use := range info.Implicit {
+			if info.WritesImplicitly(use.Register) && !slices.Contains(regs, use.Register) {
+				regs = append(regs, use.Register)
+			}
+		}
+	}
+	calls := false
+	for _, instr := range fn.AllInstrs() {
+		if ic10.LinksReturn(instr.Op) {
+			calls = true
+			reached(instr.Op)
+		}
+	}
+	if !calls {
+		return nil
+	}
+	reached(isa.OpPush)
+	reached(isa.OpPop)
+	slices.Sort(regs)
+	return regs
+}
+
+// allocateRegisters places every interval and returns the prefix of
+// Config.Scratch it held back to do it. It re-scans with more scratch reserved
+// whenever a round's spill set demands more than was held back, since a
+// narrower allocatable set can produce a different, larger spill set. Reserved
+// only grows, which bounds the rounds by len(Config.Scratch).
+func (c Config) allocateRegisters(fn *mir.Func, intervals []*interval, constrained map[mir.VirtReg]bool, pinned map[ic10.Register]bool) (map[mir.VirtReg]ic10.Register, []*interval, []ic10.Register, error) {
+	assigned, spilled, err := scan(intervals, constrained, c.allocatable(pinned), c)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	reserved := 0
+	for len(spilled) > 0 {
+		wanted, err := scratchDemand(fn, inMemory(spilled))
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		wanted = min(wanted, len(c.Scratch))
+		if wanted <= reserved {
+			break
+		}
+		reserved = wanted
+		blocked := make(map[ic10.Register]bool, len(pinned)+reserved)
+		maps.Copy(blocked, pinned)
+		for _, r := range c.Scratch[:reserved] {
+			blocked[r] = true
+		}
+		assigned, spilled, err = scan(intervals, constrained, c.allocatable(blocked), c)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	return assigned, spilled, c.Scratch[:reserved], nil
+}
+
+// inMemory reports membership of the spilled intervals by virtual register.
+func inMemory(spilled []*interval) func(mir.VirtReg) bool {
+	set := make(map[mir.VirtReg]bool, len(spilled))
+	for _, iv := range spilled {
+		set[iv.vreg] = true
+	}
+	return func(v mir.VirtReg) bool { return set[v] }
+}
+
+// allocatable orders the registers a virtual register may be given by the
+// bytes their name costs to render, so r0 through r9 and the two-character sp
+// and ra are handed out before r10 through r15. blocked adds to
+// Config.Reserved for this call.
 func (c Config) allocatable(blocked map[ic10.Register]bool) []ic10.Register {
 	unavailable := make(map[ic10.Register]bool, len(c.Reserved)+len(blocked))
 	for _, r := range c.Reserved {

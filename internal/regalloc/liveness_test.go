@@ -6,14 +6,14 @@ import (
 	"testing"
 
 	"github.com/greg2010/ic11c/internal/ic10"
+	"github.com/greg2010/ic11c/internal/isa"
 	"github.com/greg2010/ic11c/internal/mir"
 )
 
-// TestDefIndex pins the reading of the target's operand table that the whole
-// pass rests on: a destination is the unnamed, register-only first operand, and
-// every other register position is read. The store forms are the reason
-// position matters, since they spell their source operand exactly like a
-// destination but put it last.
+// TestDefIndex pins which operand each emitted instruction writes. The store
+// forms are why the answer has to come from the target's table: they spell
+// their source exactly like a destination, and nothing in the spelling of an
+// operand separates the two.
 func TestDefIndex(t *testing.T) {
 	tests := []struct {
 		name string
@@ -21,21 +21,21 @@ func TestDefIndex(t *testing.T) {
 		args []mir.Operand
 		want int
 	}{
-		{name: "move writes its first operand", op: ic10.OpMove, args: []mir.Operand{mir.VirtReg{ID: 0}, imm(1)}, want: 0},
-		{name: "add writes its first operand", op: ic10.OpAdd, args: []mir.Operand{mir.VirtReg{ID: 0}, imm(1), imm(2)}, want: 0},
-		{name: "l writes its first operand", op: ic10.OpL, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.NewDeviceBase(), mir.LogicType{}}, want: 0},
-		{name: "get writes its first operand", op: ic10.OpGet, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.NewDeviceBase(), imm(4)}, want: 0},
-		{name: "pop writes its first operand", op: ic10.OpPop, args: []mir.Operand{mir.VirtReg{ID: 0}}, want: 0},
-		{name: "peek writes its first operand", op: ic10.OpPeek, args: []mir.Operand{mir.VirtReg{ID: 0}}, want: 0},
-		{name: "rand writes its first operand", op: ic10.OpRand, args: []mir.Operand{mir.VirtReg{ID: 0}}, want: 0},
-		{name: "s reads its last operand", op: ic10.OpS, args: []mir.Operand{mir.NewDeviceBase(), mir.LogicType{}, mir.VirtReg{ID: 0}}, want: -1},
-		{name: "ss reads its last operand", op: ic10.OpSs, args: []mir.Operand{mir.NewDeviceBase(), imm(0), mir.LogicSlotType{}, mir.VirtReg{ID: 0}}, want: -1},
-		{name: "sd reads its last operand", op: ic10.OpSd, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.LogicType{}, mir.VirtReg{ID: 1}}, want: -1},
-		{name: "poke reads both operands", op: ic10.OpPoke, args: []mir.Operand{imm(0), mir.VirtReg{ID: 0}}, want: -1},
-		{name: "push reads its operand", op: ic10.OpPush, args: []mir.Operand{mir.VirtReg{ID: 0}}, want: -1},
-		{name: "beq reads every operand", op: ic10.OpBeq, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.VirtReg{ID: 1}, mir.Label{Name: "x"}}, want: -1},
-		{name: "j reads its operand", op: ic10.OpJ, args: []mir.Operand{mir.Label{Name: "x"}}, want: -1},
-		{name: "yield has no operands", op: ic10.OpYield, want: -1},
+		{name: "move writes its first operand", op: isa.OpMove, args: []mir.Operand{mir.VirtReg{ID: 0}, imm(1)}, want: 0},
+		{name: "add writes its first operand", op: isa.OpAdd, args: []mir.Operand{mir.VirtReg{ID: 0}, imm(1), imm(2)}, want: 0},
+		{name: "l writes its first operand", op: isa.OpL, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.NewDeviceBase(), mir.LogicType{}}, want: 0},
+		{name: "get writes its first operand", op: isa.OpGet, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.NewDeviceBase(), imm(4)}, want: 0},
+		{name: "pop writes its first operand", op: isa.OpPop, args: []mir.Operand{mir.VirtReg{ID: 0}}, want: 0},
+		{name: "peek writes its first operand", op: isa.OpPeek, args: []mir.Operand{mir.VirtReg{ID: 0}}, want: 0},
+		{name: "rand writes its first operand", op: isa.OpRand, args: []mir.Operand{mir.VirtReg{ID: 0}}, want: 0},
+		{name: "s reads its last operand", op: isa.OpS, args: []mir.Operand{mir.NewDeviceBase(), mir.LogicType{}, mir.VirtReg{ID: 0}}, want: -1},
+		{name: "ss reads its last operand", op: isa.OpSs, args: []mir.Operand{mir.NewDeviceBase(), imm(0), mir.LogicSlotType{}, mir.VirtReg{ID: 0}}, want: -1},
+		{name: "sd reads its last operand", op: isa.OpSd, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.LogicType{}, mir.VirtReg{ID: 1}}, want: -1},
+		{name: "poke reads both operands", op: isa.OpPoke, args: []mir.Operand{imm(0), mir.VirtReg{ID: 0}}, want: -1},
+		{name: "push reads its operand", op: isa.OpPush, args: []mir.Operand{mir.VirtReg{ID: 0}}, want: -1},
+		{name: "beq reads every operand", op: isa.OpBeq, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.VirtReg{ID: 1}, mir.Label{Name: "x"}}, want: -1},
+		{name: "j reads its operand", op: isa.OpJ, args: []mir.Operand{mir.Label{Name: "x"}}, want: -1},
+		{name: "yield has no operands", op: isa.OpYield, want: -1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -56,8 +56,9 @@ func TestDefIndex(t *testing.T) {
 }
 
 // TestDeviceConstrained pins which operand positions restrict the register a
-// value may be given. It is the device positions only, and it is not about
-// indirect referencing: an rr form reaches the whole 18 entry register array.
+// value may be given. Both kinds are asked because neither implies the other:
+// sd names a reference id and admits no device pin, rmap the reverse, so a
+// check reading one kind alone answers one of those the way it answers an add.
 func TestDeviceConstrained(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -66,11 +67,12 @@ func TestDeviceConstrained(t *testing.T) {
 		index int
 		want  bool
 	}{
-		{name: "l device position", op: ic10.OpL, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.VirtReg{ID: 1}, mir.LogicType{}}, index: 1, want: true},
-		{name: "l destination", op: ic10.OpL, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.VirtReg{ID: 1}, mir.LogicType{}}, index: 0, want: false},
-		{name: "sd reference id position", op: ic10.OpSd, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.LogicType{}, mir.VirtReg{ID: 1}}, index: 0, want: true},
-		{name: "add operand", op: ic10.OpAdd, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.VirtReg{ID: 1}, imm(1)}, index: 1, want: false},
-		{name: "index past the operand list", op: ic10.OpAdd, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.VirtReg{ID: 1}, imm(1)}, index: 9, want: false},
+		{name: "l device position", op: isa.OpL, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.VirtReg{ID: 1}, mir.LogicType{}}, index: 1, want: true},
+		{name: "l destination", op: isa.OpL, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.VirtReg{ID: 1}, mir.LogicType{}}, index: 0, want: false},
+		{name: "sd reference id position", op: isa.OpSd, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.LogicType{}, mir.VirtReg{ID: 1}}, index: 0, want: true},
+		{name: "rmap device position accepting no reference id", op: isa.OpRmap, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.NewDeviceBase(), imm(1)}, index: 1, want: true},
+		{name: "add operand", op: isa.OpAdd, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.VirtReg{ID: 1}, imm(1)}, index: 1, want: false},
+		{name: "index past the operand list", op: isa.OpAdd, args: []mir.Operand{mir.VirtReg{ID: 0}, mir.VirtReg{ID: 1}, imm(1)}, index: 9, want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -101,8 +103,8 @@ func liveSet(t *testing.T, b *builder, set map[mir.VirtReg]bool) []string {
 }
 
 // TestLivenessAcrossBackEdge is the case a single pass over layout order gets
-// wrong. A value defined before the loop and read at the top of every iteration
-// is live out of the latch, which only a fixed point reports.
+// wrong: a value read at the top of every iteration is live out of the latch,
+// which only a fixed point reports.
 func TestLivenessAcrossBackEdge(t *testing.T) {
 	b := loopAcrossBackEdge(t)
 	live, err := computeLiveness(b.fn)
@@ -145,9 +147,8 @@ func intervalOf(t *testing.T, intervals []*interval, v mir.VirtReg) *interval {
 }
 
 // TestBuildIntervalsKeepsHoles is the interval-hole policy stated as a test.
-// The value is live in the first and third blocks and dead in the second, and
-// widening it to cover the gap would make it interfere with everything defined
-// there for no reason.
+// Widening the value to cover the block it is dead in would make it interfere
+// with everything defined there for no reason.
 func TestBuildIntervalsKeepsHoles(t *testing.T) {
 	b := holeAcrossBlock(t)
 	nums, err := number(b.fn)
@@ -186,10 +187,10 @@ func TestBuildIntervalsKeepsHoles(t *testing.T) {
 func TestBuildIntervalsSplitsAtADeadDefinition(t *testing.T) {
 	b := newBuilder(t, "deaddef")
 	blk := b.block("entry")
-	b.emit(blk, ic10.OpMove, b.v("x"), imm(1))
-	b.emit(blk, ic10.OpMove, b.v("filler"), imm(2))
+	b.emit(blk, isa.OpMove, b.v("x"), imm(1))
+	b.emit(blk, isa.OpMove, b.v("filler"), imm(2))
 	sink(b, blk, b.v("filler"))
-	b.emit(blk, ic10.OpMove, b.v("x"), imm(3))
+	b.emit(blk, isa.OpMove, b.v("x"), imm(3))
 	sink(b, blk, b.v("x"))
 
 	nums, err := number(b.fn)
@@ -213,10 +214,9 @@ func TestBuildIntervalsSplitsAtADeadDefinition(t *testing.T) {
 	}
 }
 
-// TestBuildIntervalsSharesARegisterWithinAHole is the payoff for keeping holes.
-// Three values fit in one register only because two of them live entirely
-// inside the third's hole. Filling the hole would make them interfere and the
-// function would spill.
+// TestBuildIntervalsSharesARegisterWithinAHole is the payoff for keeping holes:
+// three values fit in one register only because two live entirely inside the
+// third's hole. Filling it would make them interfere and the function spill.
 func TestBuildIntervalsSharesARegisterWithinAHole(t *testing.T) {
 	b := valuesInsideAHole(t)
 	cfg := limited(t, 1, 1, 0)
@@ -235,8 +235,8 @@ func TestBuildIntervalsSharesARegisterWithinAHole(t *testing.T) {
 }
 
 // TestAllocateRejectsMalformedInput covers the shapes mir.Program.Validate
-// would also reject, since this pass runs over whatever instruction selection
-// handed it and reading direction off an unknown opcode is not possible.
+// would also reject: this pass runs over whatever selection handed it, and
+// reading direction off an unknown opcode is not possible.
 func TestAllocateRejectsMalformedInput(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -255,12 +255,27 @@ func TestAllocateRejectsMalformedInput(t *testing.T) {
 			wantMention: "not in the instruction table",
 		},
 		{
+			// NaN materialisation runs between Validate and here and rebuilds
+			// the instruction list of every block holding one, so the list
+			// allocation walks is not the one validation saw.
+			name: "nil instruction",
+			build: func(t *testing.T) *mir.Func {
+				t.Helper()
+				b := newBuilder(t, "nilinstr")
+				blk := b.block("entry")
+				b.emit(blk, isa.OpMove, b.v("x"), imm(1))
+				blk.Append(nil)
+				return b.fn
+			},
+			wantMention: "nil instruction",
+		},
+		{
 			name: "successor outside the function",
 			build: func(t *testing.T) *mir.Func {
 				t.Helper()
 				b := newBuilder(t, "stray")
 				blk := b.block("entry")
-				b.emit(blk, ic10.OpMove, b.v("x"), imm(1))
+				b.emit(blk, isa.OpMove, b.v("x"), imm(1))
 				other := newBuilder(t, "other")
 				blk.AddSucc(other.block("elsewhere"))
 				return b.fn
@@ -277,6 +292,17 @@ func TestAllocateRejectsMalformedInput(t *testing.T) {
 				t.Errorf("error = %q, want it to mention %q", err, tt.wantMention)
 			}
 		})
+	}
+}
+
+// TestComputeLivenessRejectsANilInstruction covers the pass directly: Allocate
+// is not the only way in, and a nil reaching the operand walk panics.
+func TestComputeLivenessRejectsANilInstruction(t *testing.T) {
+	b := newBuilder(t, "nilinstr")
+	blk := b.block("entry")
+	blk.Append(nil)
+	if _, err := computeLiveness(b.fn); err == nil {
+		t.Fatalf("computeLiveness succeeded on a block holding a nil instruction, want a rejection")
 	}
 }
 
