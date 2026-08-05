@@ -8,7 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/greg2010/ic11c/internal/oracle"
+	"github.com/greg2010/ic11c/internal/chip"
+	"github.com/greg2010/ic11c/internal/emit"
+	"github.com/greg2010/ic11c/internal/ic10"
 )
 
 // Register conventions every generated program keeps to, so that a program
@@ -23,38 +25,90 @@ const (
 	loopRegister = 15
 )
 
+// What a ProgrammableChip holds, from the decompiled game. A corpus that
+// outgrew one of them would go on running cleanly while it had stopped being a
+// corpus of programs the machine could hold.
+const (
+	maxProgramLines = emit.MaxLines
+	maxProgramBytes = emit.MaxBytes
+	maxLineLength   = emit.MaxLineLength
+)
+
+// separatorBytes is what the game's editor charges between two lines.
+// InputSourceCode.UpdateFileSize increments its counter twice per charged
+// line and reads no newline sequence at all, so this is the game's own pair
+// of increments rather than a platform separator's width.
+const separatorBytes = 2
+
+// sourceBytes is the size the game's editor charges for source, which is not
+// its length: UpdateFileSize adds a separator only between two lines that
+// both hold text, so trailing blank lines are free, and a line wider than
+// maxLineLength is charged at the cut, since InputSourceCode.Paste runs each
+// line through AsciiString.ParseLine before it reaches the grid.
+func sourceBytes(source string) int {
+	lines := strings.Split(strings.TrimSuffix(source, "\n"), "\n")
+	last := 0
+	for i, line := range lines {
+		if line != "" {
+			last = i
+		}
+	}
+	total := 0
+	for i, line := range lines {
+		total += min(len(line), maxLineLength)
+		if i < last {
+			total += separatorBytes
+		}
+	}
+	return total
+}
+
+// maxBlockLines is the most lines one valueBlocks emitter appends in a single
+// call, counting a label it reserved and has yet to flush. [ValueProgram]
+// keeps this much room free before starting a block; TestNoBlockOutgrowsItsHeadroom
+// holds the number to what the emitters actually do.
+const maxBlockLines = 21
+
 // rngStream keeps the two halves of the PCG seed from being equal, which the
 // generator would otherwise pass for every program.
 const rngStream = 0x9e3779b97f4a7c15
 
-// literalPool is the numeric operands a generated instruction draws from.
+// literalPool is the numeric operands a generated instruction draws from,
+// spelled as plain decimal since the game parses an operand with
+// NumberStyles.Number, which allows no exponent.
 //
-// Plain decimal only: ic10emu's number parser rejects exponent notation, so
-// "1e30" is a compile error there and a value here. Every entry is finite and
-// well inside the range the bitwise instructions range-check, which is what
-// makes a literal always safe as a bitwise operand.
+// Every entry is safely inside the ±2^63 bound the bitwise instructions fault
+// outside of. The pool also reaches past 2^53, where DoubleToLong's modular
+// reduction turns over: TestPoolsReachTheConversionBoundary holds it to
+// exercising that boundary rather than stopping short of it.
 var literalPool = []string{
 	"0", "1", "-1", "2", "-2", "3", "-3", "7", "-7", "10", "-10",
 	"255", "-256", "65535", "4294967295", "-4294967296",
 	"8388607", "4503599627370496", "-4503599627370496",
 	"9007199254740991", "-9007199254740991",
+	"9007199254740992", "-9007199254740992",
+	"13510798882111488", "-13510798882111488",
+	"4611686018427387904", "-4611686018427387904",
 	"1000000", "-1000000",
 	"0.5", "-0.5", "0.25", "1.5", "-2.5", "3.14159",
 	"0.0009765625", "-0.001", "123.456", "-123.456", "1.0000001",
 }
 
-// initialPool seeds the registers a program starts from. Every value is finite
-// and inside the bitwise range check, so the generator can treat every general
-// register as a safe bitwise operand before the program writes anything.
+// initialPool seeds the registers a program starts from. It answers to the
+// same bounds as literalPool, so every general register is a safe bitwise
+// operand before the program writes anything.
 var initialPool = []float64{
 	0, 1, -1, 2, -3, 0.5, -0.25, 255, -4096, 65536,
 	4503599627370496, -4503599627370496, 9007199254740991, -9007199254740991,
+	9007199254740992, -9007199254740992, 13510798882111488, -13510798882111488,
+	4611686018427387904, -4611686018427387904,
 	1e9, -1e9, 3.141592653589793, -2.718281828459045,
 	math.SmallestNonzeroFloat64, math.Copysign(0, -1),
 }
 
-// shiftDistancePool spans the whole low six bits the chip masks a distance
-// down to, plus the values outside it that prove the masking.
+// shiftDistancePool samples the low six bits the chip masks a distance down
+// to — both ends, the values either side of 53, and out-of-range distances
+// that prove the masking — rather than enumerating the whole range.
 var shiftDistancePool = []string{
 	"0", "1", "7", "31", "32", "52", "53", "54", "63", "64", "65", "-1", "100",
 }
@@ -62,22 +116,23 @@ var shiftDistancePool = []string{
 func newRNG(seed uint64) *rand.Rand { return rand.New(rand.NewPCG(seed, seed^rngStream)) }
 
 // generator accumulates the lines of one program.
-//
-// bounded tracks which general registers provably hold a value the bitwise and
-// shift instructions accept, so those instructions can take a register operand
-// without risking a fault the program was not meant to raise. It is cleared at
-// every label, because a label is a join the generator cannot reason across.
 type generator struct {
 	rng       *rand.Rand
 	lines     []string
 	mnemonics map[string]bool
-	bounded   [generalRegisters]bool
+	// bounded tracks which general registers provably hold a value the
+	// bitwise and shift instructions accept without faulting. It is cleared
+	// at every label, since a label is a join the generator cannot reason
+	// across.
+	bounded [generalRegisters]bool
 	// pending are labels a branch already targets and no line has defined yet.
 	pending  []string
 	labelSeq int
 	defines  []string
 	aliases  []string
-	initial  oracle.State
+	// pinSeq numbers the names label binds, so no two bind the same one.
+	pinSeq  int
+	initial chip.State
 }
 
 func newGenerator(seed uint64) *generator {
@@ -123,6 +178,22 @@ func (g *generator) defineLabel() bool {
 	g.raw(name + ":")
 	g.clearBounded()
 	return true
+}
+
+// localLabel reserves a label name and leaves it out of the pending queue, so
+// the only lines that can target it are the ones the caller emits around it.
+// That is what lets a block define its own labels without an earlier forward
+// branch landing in the middle of it.
+func (g *generator) localLabel() string {
+	name := "t" + strconv.Itoa(g.labelSeq)
+	g.labelSeq++
+	return name
+}
+
+// defineLocalLabel writes a reserved local label out where it stands.
+func (g *generator) defineLocalLabel(name string) {
+	g.raw(name + ":")
+	g.clearBounded()
 }
 
 func (g *generator) flushLabels() {
@@ -179,10 +250,9 @@ func (g *generator) boundedValue() string {
 	return pick(g.rng, safe)
 }
 
-// nonZeroLiteral is a divisor. Keeping it off zero keeps an infinity out of the
-// value generator: the chip returns one rather than faulting, but it would then
-// travel through registers the generator can no longer predict, and reaching a
-// bitwise operand it is a fault the value generator is not trying to produce.
+// nonZeroLiteral is a divisor. Zero is excluded because the chip answers an
+// infinity rather than faulting, which would then reach a bitwise operand as
+// a fault this generator is not trying to produce.
 func (g *generator) nonZeroLiteral() string {
 	for {
 		if literal := pick(g.rng, literalPool); literal != "0" {
@@ -191,8 +261,9 @@ func (g *generator) nonZeroLiteral() string {
 	}
 }
 
-// address is a memory slot every implementation agrees is in range.
-func (g *generator) address() string { return strconv.Itoa(g.rng.IntN(512)) }
+// address is a memory slot inside the chip's array, so a data access naming one
+// reaches a slot rather than the bounds check either end of it stands on.
+func (g *generator) address() string { return strconv.Itoa(g.rng.IntN(ic10.NumMemorySlots)) }
 
 func (g *generator) program(seed uint64, kind, recipe string) Program {
 	return Program{

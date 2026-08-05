@@ -6,24 +6,32 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/greg2010/ic11c/internal/chip"
 	"github.com/greg2010/ic11c/internal/ic10"
-	"github.com/greg2010/ic11c/internal/oracle"
+)
+
+// How many programs a corpus draws.
+const (
+	// DefaultPrograms keeps a corpus inside the ordinary suite's budget.
+	DefaultPrograms = 1000
+	// ShortPrograms is what -short draws.
+	ShortPrograms = 50
 )
 
 // Generator kinds.
 const (
 	// KindValue is the generator that emits terminating, fault-free programs,
-	// compared on final machine state.
+	// held to reaching their own end.
 	KindValue = "value"
-	// KindFault is the generator that provokes a fault, compared on error type
-	// and faulting line.
+	// KindFault is the generator that provokes a fault, held to raising the
+	// exception the recipe names on the line the recipe stands on.
 	KindFault = "fault"
 )
 
-// Program is one generated program and everything needed to replay it.
-//
-// Both implementations must be given the same Source and Initial or the
-// comparison means nothing.
+// Program is one generated program and everything needed to replay it. Source
+// and Initial travel together because the source is written to start from
+// those registers; a run given one without the other is a run of a program
+// nobody generated.
 type Program struct {
 	// Seed regenerates this program exactly, through ValueProgram or
 	// FaultProgram according to Kind.
@@ -35,10 +43,10 @@ type Program struct {
 	// Source is IC10 assembly with no trailing newline.
 	Source string
 	// Initial is the machine state the program starts from.
-	Initial oracle.State
+	Initial chip.State
 	// Mnemonics are the mnemonics the source contains, in sorted order. It is
 	// what the source names, not what a run executes: a branch that skips a
-	// line still counts it, because the interpreter does not report which
+	// line still counts it, because the chip does not report which
 	// instructions retired.
 	Mnemonics []string
 }
@@ -49,27 +57,6 @@ func (p Program) String() string {
 	}
 	return fmt.Sprintf("%s program, seed %d", p.Kind, p.Seed)
 }
-
-// generatedMnemonics is every mnemonic a generator emits.
-//
-// It is a declaration, not an observation: TestCorpusReachesTheGeneratedMnemonics
-// compares it against what a corpus actually produces and fails on either
-// direction of drift, so a mnemonic listed here without an emitter is caught.
-var generatedMnemonics = []string{
-	"abs", "add", "alias", "and", "bdns", "bdnsal", "bdse", "bdseal", "beq",
-	"beqal", "beqz", "beqzal", "bge", "bgeal", "bgez", "bgezal", "bgt",
-	"bgtal", "bgtz", "bgtzal", "ble", "bleal", "blez", "blezal", "blt",
-	"bltal", "bltz", "bltzal", "bnan", "bne", "bneal", "bnez", "bnezal",
-	"ceil", "clr", "define", "div", "floor", "get", "j", "jal", "l", "mod",
-	"move", "mul", "nor", "not", "or", "peek", "poke", "pop", "push", "put",
-	"s", "sdns", "sdse", "select", "seq", "seqz", "sge", "sgez", "sgt",
-	"sgtz", "sle", "slez", "sll", "slt", "sltz", "snan", "snanz", "sne",
-	"snez", "sqrt", "sra", "srl", "sub", "trunc", "xor", "yield",
-}
-
-// GeneratedMnemonics lists the mnemonics the generators emit, in sorted order.
-// Everything else in the instruction set is excluded, with a reason.
-func GeneratedMnemonics() []string { return slices.Clone(generatedMnemonics) }
 
 // Coverage counts how many generated programs named each mnemonic.
 type Coverage map[string]int
@@ -97,12 +84,8 @@ func (c Coverage) Missed() []string {
 }
 
 // Report renders the tally as a coverage summary: how much of the instruction
-// set this corpus reached, and what it did not, separating mnemonics excluded
-// on purpose from the rest.
-//
-// The last list is empty only for a tally over every generator. One corpus
-// alone leaves the other's mnemonics in it, which is the honest reading: it is
-// what that corpus did not exercise.
+// set this corpus reached, and what it did not, separating the mnemonics
+// [excluded] keeps out on purpose from the rest.
 func (c Coverage) Report() string {
 	reached, missed := c.Reached(), c.Missed()
 	var excludedMisses, unreached []string
