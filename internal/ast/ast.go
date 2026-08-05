@@ -40,17 +40,23 @@ type Type interface {
 
 // File is one parsed translation unit. Decls holds every declaration that
 // parsed, in source order; a declaration the parser could not make sense of
-// appears as a [BadDecl] so later positions stay meaningful.
+// appears as a [BadDecl] so later positions stay meaningful. IntSpelling is the
+// first spelling the file gave the integer type, and names that type wherever
+// no written type produced one; it is empty where the file writes none.
 type File struct {
-	Name  string
-	Start source.Position
-	Decls []Decl
+	Name        string
+	Start       source.Position
+	Decls       []Decl
+	IntSpelling string
 }
 
-// ScalarType is a built-in type keyword.
+// ScalarType is a built-in type keyword. Spelling is the text the source wrote,
+// which is what a diagnostic naming this type quotes back; it is empty where no
+// source wrote one.
 type ScalarType struct {
-	TypePos source.Position
-	Kind    ScalarKind
+	TypePos  source.Position
+	Kind     ScalarKind
+	Spelling string
 }
 
 // PointerType is a pointer to Elem. Pos reports the '*', not the start of the

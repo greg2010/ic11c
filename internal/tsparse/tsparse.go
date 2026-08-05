@@ -164,6 +164,8 @@ type converter struct {
 	// See [converter.applyMarks].
 	added []int
 	wrote map[uint]bool
+	// intSpelling is the first spelling the file gave the integer type.
+	intSpelling string
 }
 
 func newConverter(file, src string) *converter {

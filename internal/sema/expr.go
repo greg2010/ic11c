@@ -18,7 +18,7 @@ func (c *checker) exprType(x ast.Expr) *Type {
 	case *ast.Ident:
 		return c.ident(x)
 	case *ast.IntLit, *ast.CharLit:
-		return IntType
+		return c.intType
 	case *ast.FloatLit:
 		return DoubleType
 	case *ast.BoolLit:
@@ -87,7 +87,7 @@ func (c *checker) unary(x *ast.UnaryExpr) *Type {
 		t := unqual(decay(c.expr(x.X)))
 		if !isArithmetic(t) {
 			if t.Kind() != Invalid {
-				c.errorf(x.X.Pos(), "the operand of unary '%s' must be a long long or a double, found %s", x.Op, t)
+				c.errorf(x.X.Pos(), "the operand of unary '%s' must be a %s or a double, found %s", x.Op, c.intAs(t), t)
 			}
 			return invalidType
 		}
@@ -97,7 +97,7 @@ func (c *checker) unary(x *ast.UnaryExpr) *Type {
 		if !c.requireInt(t, x.X, "the operand of unary '"+x.Op.String()+"'") {
 			return invalidType
 		}
-		return IntType
+		return unqual(decay(t))
 	case ast.LogicalNot:
 		t := c.expr(x.X)
 		c.condition(x.X, t, "the operand of '!'")
@@ -187,7 +187,7 @@ func (c *checker) incDec(x *ast.IncDecExpr) *Type {
 		return unqual(t)
 	case Invalid, Bool, Dev, Void, Array:
 	}
-	c.errorf(x.OpPos, "the operand of '%s' must be a long long, a double, or a pointer, found %s", x.Op, t)
+	c.errorf(x.OpPos, "the operand of '%s' must be a %s, a double, or a pointer, found %s", x.Op, c.intAs(t), t)
 	return invalidType
 }
 
@@ -205,7 +205,7 @@ func (c *checker) binary(x *ast.BinaryExpr) *Type {
 		if !okL || !okR {
 			return invalidType
 		}
-		return IntType
+		return unqual(decay(lhs))
 	case ast.Eq, ast.Ne, ast.Lt, ast.Le, ast.Gt, ast.Ge:
 		return c.comparison(x)
 	case ast.LogicalAnd, ast.LogicalOr:
@@ -246,7 +246,7 @@ func (c *checker) additive(x *ast.BinaryExpr) *Type {
 		return rhs
 	case lp && rp && x.Op == ast.Sub:
 		c.sameObject(x.X, x.Y, x.OpPos, "the operands of '-'")
-		return IntType
+		return c.intType
 	default:
 		c.errorf(x.OpPos, "'%s' does not apply to %s and %s", x.Op, lhs, rhs)
 		return invalidType
@@ -279,7 +279,7 @@ func (c *checker) requireArith(t *Type, x ast.Expr, what string) {
 	if isArithmetic(t) || unqual(decay(t)).Kind() == Invalid {
 		return
 	}
-	c.errorf(x.Pos(), "%s must be a long long or a double, found %s", what, t)
+	c.errorf(x.Pos(), "%s must be a %s or a double, found %s", what, c.intAs(t), t)
 }
 
 // widen records the conversion a long long operand needs to meet a double one. It is
@@ -313,7 +313,7 @@ func (c *checker) comparison(x *ast.BinaryExpr) *Type {
 	case lhs.Kind() == Dev || rhs.Kind() == Dev:
 		c.errorf(x.OpPos, "cannot compare %s with %s; a dev names a device pin rather than a value, and no cast turns one into a number", lhs, rhs)
 	default:
-		c.errorf(x.OpPos, "cannot compare %s with %s; long long, bool, and double are distinct types, so convert with a cast", lhs, rhs)
+		c.errorf(x.OpPos, "cannot compare %s with %s; %s, bool, and double are distinct types, so convert with a cast", lhs, rhs, c.intAs(lhs, rhs))
 	}
 	return BoolType
 }
@@ -362,11 +362,11 @@ func (c *checker) compoundAssign(x *ast.AssignExpr, target, value *Type) *Type {
 		if !okT || !okV {
 			return invalidType
 		}
-		return IntType
+		return unqual(decay(target))
 	}
 	if !isArithmetic(value) {
 		if value.Kind() != Invalid {
-			c.errorf(x.Value.Pos(), "the right operand of '%s' must be a long long or a double, found %s", op, value)
+			c.errorf(x.Value.Pos(), "the right operand of '%s' must be a %s or a double, found %s", op, c.intAs(value), value)
 		}
 		return invalidType
 	}
@@ -493,7 +493,7 @@ func (c *checker) cast(x *ast.CastExpr) *Type {
 		return target
 	case Dev, Void, Pointer, Array:
 	}
-	c.errorf(x.Lparen, "cannot convert %s to %s; a cast targets long long, bool, or double", src, target)
+	c.errorf(x.Lparen, "cannot convert %s to %s; a cast targets %s, bool, or double", src, target, c.intAs(target, src))
 	return target
 }
 
@@ -538,9 +538,9 @@ func (c *checker) condition(x ast.Expr, t *Type, what string) {
 	case Int:
 		c.prog.Conversions[x] = BoolType
 	case Double:
-		c.errorf(x.Pos(), "%s must be a long long or a bool, found %s; compare the value rather than testing it against zero", what, t)
+		c.errorf(x.Pos(), "%s must be a %s or a bool, found %s; compare the value rather than testing it against zero", what, c.intAs(t), t)
 	case Dev, Void, Pointer, Array:
-		c.errorf(x.Pos(), "%s must be a long long or a bool, found %s", what, t)
+		c.errorf(x.Pos(), "%s must be a %s or a bool, found %s", what, c.intAs(t), t)
 	}
 }
 
@@ -552,7 +552,7 @@ func (c *checker) requireInt(t *Type, x ast.Expr, what string) bool {
 		return true
 	case Bool, Double, Dev, Void, Pointer, Array:
 	}
-	c.errorf(x.Pos(), "%s must be a long long, found %s", what, t)
+	c.errorf(x.Pos(), "%s must be a %s, found %s", what, c.intAs(t), t)
 	return false
 }
 

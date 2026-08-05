@@ -55,6 +55,9 @@ type Type struct {
 	konst bool
 	elem  *Type
 	size  int64
+	// spelling is how the source that produced this type wrote it. It is not
+	// part of type identity: two types differing only here are one type.
+	spelling string
 }
 
 // The predeclared scalar types. Their fields are unexported, so the values are
@@ -75,6 +78,45 @@ var (
 
 // PointerTo returns the type of a pointer to elem.
 func PointerTo(elem *Type) *Type { return &Type{kind: Pointer, elem: elem} }
+
+// spelled returns t written the way spelling writes it, or t unchanged where
+// spelling is empty or is already t's own name. The result is [Type.Equal] to t.
+func spelled(t *Type, spelling string) *Type {
+	if t == nil || spelling == "" || spelling == kindNames[t.kind] {
+		return t
+	}
+	u := *t
+	u.spelling = spelling
+	return &u
+}
+
+// intAs gives the integer type for a message that has no written specifier of
+// its own, spelled the way the first of ts to reach it does, or the file's own.
+func (c *checker) intAs(ts ...*Type) *Type {
+	for _, t := range ts {
+		if spelling, names := intSpelling(t); names {
+			return spelled(IntType, spelling)
+		}
+	}
+	return c.intType
+}
+
+// intSpelling reports how t writes the integer type, looking through a pointer
+// or an array to the element that carries it, and false where t does not reach
+// it at all. The empty spelling is the canonical one.
+func intSpelling(t *Type) (string, bool) {
+	for t != nil {
+		switch t.kind {
+		case Int:
+			return t.spelling, true
+		case Pointer, Array:
+			t = t.elem
+		case Invalid, Bool, Double, Dev, Void:
+			return "", false
+		}
+	}
+	return "", false
+}
 
 // ArrayOf returns the type of an array of n elements of elem. n is the bound
 // the declaration wrote, which the caller has already checked is a positive
@@ -139,10 +181,14 @@ func (t *Type) String() string {
 	case Array:
 		return t.elem.String() + "[" + strconv.FormatInt(t.size, 10) + "]"
 	default:
-		if t.konst {
-			return "const " + t.kind.String()
+		name := t.spelling
+		if name == "" {
+			name = t.kind.String()
 		}
-		return t.kind.String()
+		if t.konst {
+			return "const " + name
+		}
+		return name
 	}
 }
 
@@ -151,6 +197,11 @@ func (t *Type) String() string {
 func qualified(t *Type, konst bool) *Type {
 	if !konst || t == nil || t.konst {
 		return t
+	}
+	if t.spelling != "" {
+		u := *t
+		u.konst = true
+		return &u
 	}
 	// Default is the rule: the named kinds only spare an allocation, and a kind
 	// with no predeclared const value is qualified by copying it.
@@ -174,6 +225,11 @@ func qualified(t *Type, konst bool) *Type {
 func unqual(t *Type) *Type {
 	if t == nil || !t.konst {
 		return t
+	}
+	if t.spelling != "" {
+		u := *t
+		u.konst = false
+		return &u
 	}
 	// Default is the rule: the named kinds only spare an allocation, and a kind
 	// with no predeclared value drops the qualifier by copying it.
@@ -274,15 +330,18 @@ func assignableTo(dst, src *Type) bool {
 // computes in, and Invalid for an operand pair that does not meet. long long
 // widens to double where the other operand is one — the one place an
 // operator converts anything — since the widening is exact and loses nothing.
+// An integer result is the left operand's own type, so a message about it names
+// the integer type the way that operand was written.
 func arithType(lhs, rhs *Type) *Type {
-	l, r := unqual(decay(lhs)).Kind(), unqual(decay(rhs)).Kind()
+	left, right := unqual(decay(lhs)), unqual(decay(rhs))
+	l, r := left.Kind(), right.Kind()
 	switch {
 	case l == Double && (r == Double || r == Int):
 		return DoubleType
 	case l == Int && r == Double:
 		return DoubleType
 	case l == Int && r == Int:
-		return IntType
+		return left
 	default:
 		return invalidType
 	}

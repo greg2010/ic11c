@@ -24,7 +24,9 @@ const bitwiseLimit = exactLimit - 1
 
 // widenAdvice and castLeftAdvice both tell the user to cast to long long so C
 // computes in the machine's own width; castLeftAdvice names the left operand
-// specifically because a shift takes its type from that operand alone.
+// specifically because a shift takes its type from that operand alone. Neither
+// follows the file's spelling: the subject is the width C converts in, and long
+// is 32 bits under LLP64 and under ILP32, where casting to it widens nothing.
 const (
 	widenAdvice    = "cast an operand to long long so that C widens the operation too"
 	castLeftAdvice = "cast the left operand to long long so that C widens the shift too"
@@ -279,9 +281,9 @@ func (c *checker) foldNode(x ast.Expr, mode constMode) (Value, *constFail) {
 	}
 	switch x := x.(type) {
 	case *ast.IntLit:
-		return c.checkWidth(x.Pos(), "the integer literal "+strconv.FormatInt(x.Value, 10), x.Value)
+		return c.checkWidth(x.Pos(), "the integer literal "+strconv.FormatInt(x.Value, 10), x.Value, c.intType)
 	case *ast.CharLit:
-		return Value{Type: IntType, Int: x.Value}, nil
+		return Value{Type: c.intType, Int: x.Value}, nil
 	case *ast.FloatLit:
 		return doubleValue(x.Value), nil
 	case *ast.BoolLit:
@@ -358,7 +360,7 @@ func (c *checker) constUnary(x *ast.UnaryExpr, mode constMode) (Value, *constFai
 		if double {
 			return v, nil
 		}
-		return Value{Type: IntType, Int: v.Int}, nil
+		return Value{Type: c.intType, Int: v.Int}, nil
 	case ast.Neg:
 		if double {
 			return doubleValue(-v.Float), nil
@@ -579,7 +581,7 @@ func (c *checker) constResult(pos source.Position, what string, t cType, v int64
 		c.errorf(pos, "%s is %d, which does not fit '%s', the type C computes it in; %s", what, v, t, widenAdvice)
 		return Value{}, &constFail{pos: pos}
 	}
-	return c.checkWidth(pos, what, v)
+	return c.checkWidth(pos, what, v, c.intType)
 }
 
 // constDouble folds an operator with a double operand. Go's float64 arithmetic
@@ -625,7 +627,7 @@ func (c *checker) constArith(x *ast.BinaryExpr, t cType, a, b int64, fold func(a
 	what := operatorResult(x.Op.String())
 	v, exact := fold(a, b)
 	if !exact {
-		return c.unrepresentable(x.OpPos, what)
+		return c.unrepresentable(x.OpPos, what, c.intType)
 	}
 	return c.constResult(x.OpPos, what, t, v)
 }
@@ -738,23 +740,24 @@ func (c *checker) checkShiftCount(pos source.Position, t cType, count int64) boo
 	return false
 }
 
-// checkWidth rejects a long long constant outside the range the machine
-// holds. The bound is on magnitude, not round-trip: a power of two past 2^53
-// survives a double untouched but is rejected anyway, since arithmetic near it
-// is no longer exact.
-func (c *checker) checkWidth(pos source.Position, what string, v int64) (Value, *constFail) {
+// checkWidth rejects an integer constant outside the range the machine holds,
+// naming intType in the message and giving it to the value. The bound is on
+// magnitude, not round-trip: a power of two past 2^53 survives a double
+// untouched but is rejected anyway, since arithmetic near it is no longer exact.
+func (c *checker) checkWidth(pos source.Position, what string, v int64, intType *Type) (Value, *constFail) {
 	if v > exactLimit || v < -exactLimit {
-		return c.unrepresentable(pos, what)
+		return c.unrepresentable(pos, what, intType)
 	}
-	return Value{Type: IntType, Int: v}, nil
+	return Value{Type: intType, Int: v}, nil
 }
 
-// unrepresentable reports a value outside [exactLimit].
+// unrepresentable reports a value outside [exactLimit], spelling the type it
+// does not fit the way intType writes it.
 //
 // It is also what an overflowed int64 fold reports, which is past the window by
 // a wide margin, so the range the message names describes both.
-func (c *checker) unrepresentable(pos source.Position, what string) (Value, *constFail) {
-	c.errorf(pos, "%s is outside -2^53 to 2^53, the range a long long holds on this machine, where every value lives in an IEEE double", what)
+func (c *checker) unrepresentable(pos source.Position, what string, intType *Type) (Value, *constFail) {
+	c.errorf(pos, "%s is outside -2^53 to 2^53, the range a %s holds on this machine, where every value lives in an IEEE double", what, intType)
 	return Value{}, &constFail{pos: pos}
 }
 
@@ -798,32 +801,33 @@ func (c *checker) constCast(x *ast.CastExpr, mode constMode) (Value, *constFail)
 	if fail != nil {
 		return Value{}, fail
 	}
-	switch c.prog.Types[x].Kind() {
+	switch target := c.prog.Types[x]; target.Kind() {
 	case Bool:
 		return Value{Type: BoolType, Int: boolInt(v.Num() != 0)}, nil
 	case Double:
 		return doubleValue(v.Num()), nil
 	case Int:
-		return c.constTruncate(x, v)
+		return c.constTruncate(x, target, v)
 	case Invalid, Dev, Void, Pointer, Array:
 	}
 	return Value{}, reported(x)
 }
 
-// constTruncate folds a cast of a double to a long long. A whole part no
-// int64 holds — including NaN and an infinity, which the machine's trunc
-// answers with unchanged — is refused outright. One that fits is still held
-// to the 53 bits the machine represents exactly, like every integer constant.
-func (c *checker) constTruncate(x *ast.CastExpr, v Value) (Value, *constFail) {
+// constTruncate folds a cast of a double to the integer type target, which the
+// cast wrote. A whole part no int64 holds — including NaN and an infinity,
+// which the machine's trunc answers with unchanged — is refused outright. One
+// that fits is still held to the 53 bits the machine represents exactly, like
+// every integer constant.
+func (c *checker) constTruncate(x *ast.CastExpr, target *Type, v Value) (Value, *constFail) {
 	if v.Type.Kind() != Double {
-		return Value{Type: IntType, Int: v.Int}, nil
+		return Value{Type: target, Int: v.Int}, nil
 	}
 	whole := math.Trunc(v.Float)
 	if math.IsNaN(whole) || whole < math.MinInt64 || whole >= -float64(math.MinInt64) {
-		c.errorf(x.Lparen, "the cast truncates %s, which is not a value a long long holds", v)
+		c.errorf(x.Lparen, "the cast truncates %s, which is not a value a %s holds", v, target)
 		return Value{}, &constFail{pos: x.Lparen}
 	}
-	return c.checkWidth(x.Lparen, "the value this cast truncates to", int64(whole))
+	return c.checkWidth(x.Lparen, "the value this cast truncates to", int64(whole), target)
 }
 
 func boolInt(b bool) int64 {

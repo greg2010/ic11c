@@ -127,6 +127,10 @@ type checker struct {
 	// pins holds what a declaration promised is wired to each housing position,
 	// which is what makes a pin-addressed access checkable. See [pinClaim].
 	pins map[Device]pinClaim
+
+	// intType is the integer type spelled the way this file spells it, and names
+	// that type wherever no written type produced one.
+	intType *Type
 }
 
 func newChecker(file *ast.File, tables Tables) (*checker, error) {
@@ -156,6 +160,7 @@ func newChecker(file *ast.File, tables Tables) (*checker, error) {
 		scope:      newScopes(universe),
 		funcs:      make(map[string]*Func),
 		pins:       make(map[Device]pinClaim),
+		intType:    spelled(IntType, file.IntSpelling),
 	}, nil
 }
 

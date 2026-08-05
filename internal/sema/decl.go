@@ -315,7 +315,10 @@ func (c *checker) resolveType(t ast.Type, konst bool) *Type {
 	case *ast.ScalarType:
 		switch t.Kind {
 		case ast.Int:
-			return qualified(IntType, konst)
+			// IntType, not c.intType: a written specifier names itself, and
+			// starting from the file's spelling would drop the long long one in a
+			// file that writes long first.
+			return qualified(spelled(IntType, t.Spelling), konst)
 		case ast.Bool:
 			return qualified(BoolType, konst)
 		case ast.Double:
@@ -385,7 +388,7 @@ func (c *checker) arrayType(t *ast.ArrayType, konst bool) *Type {
 func (c *checker) arrayBound(size ast.Expr) (int64, bool) {
 	t := c.expr(size)
 	if unqual(t).Kind() != Int && t.Kind() != Invalid {
-		c.errorf(size.Pos(), "an array bound must be a long long, found %s", t)
+		c.errorf(size.Pos(), "an array bound must be a %s, found %s", c.intAs(t), t)
 		return 0, false
 	}
 	v, ok := c.requireConst(size, integerConst, "an array bound")

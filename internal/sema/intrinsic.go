@@ -193,6 +193,8 @@ func (c *checker) intrinsicCall(x *ast.CallExpr, in *Intrinsic) *Type {
 // table name is not looked up in scope: a logic type carries meaning only
 // here, and a variable of the same name is a different thing. A device is
 // the one named operand that can also be a declaration, since dev is a type.
+// A mismatch names IntType rather than c.intType: the prelude declares these
+// parameters long long, and that is a written specifier like any other.
 func (c *checker) operand(in *Intrinsic, i int, arg ast.Expr) Operand {
 	kind := in.Params[i]
 	switch kind {

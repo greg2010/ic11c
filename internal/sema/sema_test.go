@@ -459,6 +459,18 @@ void main(void) {
 }
 `,
 		},
+		{
+			// What fails if the spelling ever enters [sema.Type.Equal].
+			name: "a definition may respell the prototype's integer type",
+			src: `long f(long x);
+long long f(long long x) {
+    return x;
+}
+void main(void) {
+    __ic_sleep(f(1));
+}
+`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1401,15 +1413,312 @@ void main(void) {
 			want: "'d7' is not a device",
 		},
 		{
-			// An object declared with the short spelling is named by the
-			// canonical one in every message about it.
-			name: "the short spelling is reported as the canonical one",
+			name: "the written spelling names the type",
 			src: `void main(void) {
     long a = 1;
     double *p = /*!*/&a;
 }
 `,
-			want: "cannot use long long * as double * in the initializer of 'p'",
+			want: "cannot use long * as double * in the initializer of 'p'",
+		},
+		{
+			name: "the long spelling still names itself",
+			src: `void main(void) {
+    long long a = 1;
+    double *p = /*!*/&a;
+}
+`,
+			want: "cannot use long long * as double *",
+		},
+		{
+			// The file writes long first, so a fallback taken for the base type
+			// would report this declaration as long.
+			name: "two spellings in one file each name themselves",
+			src: `void main(void) {
+    long a = 1;
+    long long b = 2;
+    double *q = /*!*/&b;
+}
+`,
+			want: "cannot use long long * as double *",
+		},
+		{
+			name: "a const object keeps its spelling",
+			src: `void main(void) {
+    const long a = 1;
+    double *p = /*!*/&a;
+}
+`,
+			want: "cannot use const long * as double *",
+		},
+		{
+			name: "an array keeps its element's spelling",
+			src: `void main(void) {
+    long a[2] = {1, 2};
+    double *q = /*!*/a;
+}
+`,
+			want: "cannot use long[2] as double *",
+		},
+		{
+			// The operator drops the const, which is the one read that rebuilds
+			// the type from its kind.
+			name: "an arithmetic result keeps a const operand's spelling",
+			src: `void main(void) {
+    const long a = 1;
+    double d = 2.0;
+    double r = 1 /*!*/? a + 1 : d;
+}
+`,
+			want: "found long and double",
+		},
+		{
+			// The file writes long first, so a result taken from the fallback
+			// rather than from the operand would report this one as long.
+			name: "a bitwise result keeps the operand's spelling",
+			src: `void main(void) {
+    long a = 1;
+    long long b = 2;
+    double d = 2.0;
+    double r = a /*!*/? b & 1 : d;
+}
+`,
+			want: "found long long and double",
+		},
+		{
+			name: "a complement result keeps the operand's spelling",
+			src: `void main(void) {
+    long a = 1;
+    long long b = 2;
+    double d = 2.0;
+    double r = a /*!*/? ~b : d;
+}
+`,
+			want: "found long long and double",
+		},
+		{
+			name: "a compound bitwise result keeps the target's spelling",
+			src: `void main(void) {
+    long a = 1;
+    long long b = 2;
+    double d = 2.0;
+    double r = a /*!*/? (b &= 1) : d;
+}
+`,
+			want: "found long long and double",
+		},
+		{
+			name: "a shift result keeps the short spelling",
+			src: `void main(void) {
+    long long a = 1;
+    long b = 2;
+    double d = 2.0;
+    double r = a /*!*/? b << 1 : d;
+}
+`,
+			want: "found long and double",
+		},
+		{
+			name: "a complement result keeps the short spelling",
+			src: `void main(void) {
+    long long a = 1;
+    long b = 2;
+    double d = 2.0;
+    double r = a /*!*/? ~b : d;
+}
+`,
+			want: "found long and double",
+		},
+		{
+			name: "a compound remainder result keeps the short spelling",
+			src: `void main(void) {
+    long long a = 1;
+    long b = 2;
+    double d = 2.0;
+    double r = a /*!*/? (b %= 2) : d;
+}
+`,
+			want: "found long and double",
+		},
+		{
+			name: "a rule names the file's spelling",
+			src: `void main(void) {
+    long a = 1;
+    double d = 2.0;
+    a = /*!*/d & 1;
+}
+`,
+			want: "must be a long, found double",
+		},
+		{
+			name: "a rule falls back where the file writes no integer",
+			src: `void main(void) {
+    double d = 1.0;
+    if (/*!*/d) {
+    }
+}
+`,
+			want: "must be a long long or a bool",
+		},
+		{
+			name: "a literal takes the file's spelling",
+			src: `void main(void) {
+    long a = 1;
+    double r = a /*!*/? 1 : 1.0;
+}
+`,
+			want: "found long and double",
+		},
+		{
+			name: "an argument names the declaration in force",
+			src: `long f(long x);
+void main(void) {
+    __ic_sleep(f(/*!*/1.0));
+}
+long long f(long long x) {
+    return x;
+}
+`,
+			want: "cannot use double as long in an argument to 'f'",
+		},
+		{
+			// Past the definition the call is checked against its types, so the
+			// spelling a reader scrolling up would find is the one named.
+			name: "an argument past the definition names the definition",
+			src: `long f(long x);
+long long f(long long x) {
+    return x;
+}
+void main(void) {
+    __ic_sleep(f(/*!*/1.0));
+}
+`,
+			want: "cannot use double as long long in an argument to 'f'",
+		},
+		{
+			// The prelude declares the parameter, and it writes long long.
+			name: "an intrinsic names the prelude's spelling",
+			src: `void main(void) {
+    long n = 1;
+    double v = __ic_load_batch(/*!*/1.5, Temperature, Average);
+    __ic_sleep(v * n);
+}
+`,
+			want: "as long long in an argument to __ic_load_batch",
+		},
+		{
+			name: "the const mismatch names both spellings",
+			src: `void main(void) {
+    const long long a = 1;
+    long *p = /*!*/&a;
+}
+`,
+			want: "cannot use const long long * as long *",
+		},
+		{
+			// The advice is about the width C converts in, where long is 32 bits
+			// on some implementations, so it names long long in a long file too.
+			name: "the widening advice names long long whatever the file writes",
+			src: `void main(void) {
+    long a = 100000 /*!*/* 100000;
+    __ic_sleep(a);
+}
+`,
+			want: "does not fit 'int', the type C computes it in; cast an operand to long long",
+		},
+		{
+			name: "the shift advice names long long whatever the file writes",
+			src: `void main(void) {
+    long a = 1 /*!*/<< 40;
+    __ic_sleep(a);
+}
+`,
+			want: "the width of 'int' that C gives the left operand, found 40; cast the left operand to long long",
+		},
+		{
+			name: "a cast target outranks the file's spelling",
+			src: `void main(void) {
+    long a = 1;
+    double d = /*!*/(long long)1e300;
+    __ic_sleep(a + d);
+}
+`,
+			want: "which is not a value a long long holds",
+		},
+		{
+			name: "a short cast target outranks the file's spelling",
+			src: `void main(void) {
+    long long a = 1;
+    double d = /*!*/(long)1e300;
+    __ic_sleep(a + d);
+}
+`,
+			want: "which is not a value a long holds",
+		},
+		{
+			name: "a cast target outranks the file's spelling past 2^53",
+			src: `void main(void) {
+    long a = 1;
+    long long b = /*!*/(long long)9007199254740994.0;
+    __ic_sleep(a + b);
+}
+`,
+			want: "the range a long long holds",
+		},
+		{
+			name: "a short cast target outranks the file's spelling past 2^53",
+			src: `void main(void) {
+    long long a = 1;
+    long b = /*!*/(long)9007199254740994.0;
+    __ic_sleep(a + b);
+}
+`,
+			want: "the range a long holds",
+		},
+		{
+			name: "the types a cast targets are spelled like the one written",
+			src: `void main(void) {
+    long long n = 1;
+    long a = 1;
+    long *p = &a;
+    __ic_sleep(n + /*!*/(long)p);
+}
+`,
+			want: "cannot convert long * to long; a cast targets long, bool, or double",
+		},
+		{
+			name: "the distinct types are spelled like the operand compared",
+			src: `void main(void) {
+    long a = 1;
+    long long b = 2;
+    if (b /*!*/== (a > 1)) {
+    }
+}
+`,
+			want: "cannot compare long long with bool; long long, bool, and double are distinct types",
+		},
+		{
+			name: "a condition names the type the way the operand does",
+			src: `void main(void) {
+    long a = 1;
+    long long b = 2;
+    long long *p = &b;
+    if (/*!*/p) {
+    }
+}
+`,
+			want: "must be a long long or a bool, found long long *",
+		},
+		{
+			name: "an operand rule names the type the way the operand does",
+			src: `void main(void) {
+    long a = 1;
+    long long b = 2;
+    long long *p = &b;
+    __ic_sleep(-/*!*/p);
+}
+`,
+			want: "the operand of unary '-' must be a long long or a double, found long long *",
 		},
 	}
 

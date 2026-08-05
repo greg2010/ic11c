@@ -20,9 +20,8 @@ const (
 	prefabAttr    = "prefab"
 )
 
-// scalarTypeAliases are the further spellings a type answers to. long long
-// stays what a diagnostic quotes, since it is the spelling C guarantees at
-// least 64 bits of on every implementation.
+// scalarTypeAliases are the further spellings a type answers to. Which one a
+// diagnostic quotes is decided by the declaration it is about rather than here.
 var scalarTypeAliases = map[string]ast.ScalarKind{"long": ast.Int}
 
 // scalarTypes maps every spelling MicroC gives a scalar type to the kind that
@@ -40,8 +39,8 @@ var scalarTypes = func() map[string]ast.ScalarKind {
 }()
 
 // microCTypes lists what a diagnostic should offer in place of a type MicroC
-// does not have. It names each kind once, in the spelling a diagnostic quotes,
-// rather than every spelling scalarTypes accepts.
+// does not have. It names each kind once, in its canonical spelling, rather
+// than every spelling scalarTypes accepts.
 var microCTypes = func() string {
 	kinds := ast.ScalarKinds()
 	spellings := make([]string, len(kinds))
@@ -88,6 +87,7 @@ func (c *converter) translationUnit(n *ts.Node) *ast.File {
 		}
 		f.Decls = append(f.Decls, c.decl(ch.node))
 	}
+	f.IntSpelling = c.intSpelling
 	return f
 }
 
@@ -454,7 +454,18 @@ func (c *converter) scalarType(n *ts.Node, spelling string) (ast.Type, bool) {
 		c.notAType(n, spelling)
 		return nil, false
 	}
-	return &ast.ScalarType{TypePos: c.start(n), Kind: kind}, true
+	return c.scalarNode(n, kind, spelling), true
+}
+
+// scalarNode builds the node a written type becomes, recording the spelling a
+// diagnostic quotes it back with and, for the integer type, the first spelling
+// the file gives it. Every ast.ScalarType the converter builds comes from here,
+// so no written type reaches sema without its spelling.
+func (c *converter) scalarNode(n *ts.Node, kind ast.ScalarKind, spelling string) *ast.ScalarType {
+	if kind == ast.Int && c.intSpelling == "" {
+		c.intSpelling = spelling
+	}
+	return &ast.ScalarType{TypePos: c.start(n), Kind: kind, Spelling: spelling}
 }
 
 // sizedType reads a type written with size specifiers, which is how the
@@ -486,7 +497,7 @@ func (c *converter) sizedType(n *ts.Node) (ast.Type, bool) {
 		return nil, false
 	}
 	if kind, named := scalarTypes[spelling]; named {
-		return &ast.ScalarType{TypePos: c.start(n), Kind: kind}, true
+		return c.scalarNode(n, kind, spelling), true
 	}
 	// C writes the integer type with a trailing int as well, and MicroC does
 	// not. One diagnostic, drawn against the word to delete rather than against
@@ -495,7 +506,9 @@ func (c *converter) sizedType(n *ts.Node) (ast.Type, bool) {
 	if rest, trailing := strings.CutSuffix(spelling, " int"); trailing {
 		if kind, named := scalarTypes[rest]; named {
 			c.errorf(c.start(words[len(words)-1]), "MicroC writes the integer type as '%s', without the trailing 'int'", rest)
-			return &ast.ScalarType{TypePos: c.start(n), Kind: kind}, true
+			// rest, not spelling: the node agrees with the corrected spelling the
+			// diagnostic just named.
+			return c.scalarNode(n, kind, rest), true
 		}
 	}
 	if extra, over := c.spelledPast(words); over {

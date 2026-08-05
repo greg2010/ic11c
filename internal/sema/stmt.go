@@ -113,7 +113,7 @@ func (c *checker) switchStmt(s *ast.SwitchStmt) {
 	switch tag.Kind() {
 	case Int, Bool, Invalid:
 	case Double, Dev, Void, Pointer, Array:
-		c.errorf(s.Tag.Pos(), "a switch tag must be a long long or a bool, found %s", tag)
+		c.errorf(s.Tag.Pos(), "a switch tag must be a %s or a bool, found %s", c.intAs(tag), tag)
 		tag = invalidType
 	}
 

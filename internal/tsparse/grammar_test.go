@@ -434,6 +434,81 @@ func TestQualifiersTellConstFromConstexpr(t *testing.T) {
 	}
 }
 
+// TestAWrittenTypeRecordsTheSpellingADiagnosticQuotes pins what every message
+// about a declared object names it with. The trailing-'int' row records the
+// corrected spelling rather than the text as written, so the node and the
+// diagnostic that deleted the word agree.
+func TestAWrittenTypeRecordsTheSpellingADiagnosticQuotes(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{name: "short spelling", src: "long a = 1;", want: "long"},
+		{name: "canonical spelling", src: "long long a = 1;", want: "long long"},
+		{name: "another type", src: "double a = 1.0;", want: "double"},
+		{name: "trailing int", src: "long int a = 1;", want: "long"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := onlyScalarType(t, tt.src).Spelling; got != tt.want {
+				t.Errorf("Spelling = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFileIntSpellingIsTheFirstOneWritten pins the fallback a message about a
+// type no declaration produced is named with.
+func TestFileIntSpellingIsTheFirstOneWritten(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{name: "short spelling first", src: "long a = 1;\nlong long b = 2;\n", want: "long"},
+		{name: "canonical spelling first", src: "long long a = 1;\nlong b = 2;\n", want: "long long"},
+		{name: "the file writes no integer", src: "double a = 1.0;\n", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, diags, err := Parse("test.c", tt.src)
+			if err != nil {
+				t.Fatalf("Parse failed: %v", err)
+			}
+			if len(diags) != 0 {
+				t.Fatalf("%q did not parse cleanly:\n%s", tt.src, diags)
+			}
+			if f.IntSpelling != tt.want {
+				t.Errorf("IntSpelling = %q, want %q", f.IntSpelling, tt.want)
+			}
+		})
+	}
+}
+
+// onlyScalarType gives the scalar type of the file's one declaration. Unlike
+// [onlyVarDecl] it tolerates diagnostics, since a type MicroC corrects still
+// converts and its recorded spelling is what this asserts.
+func onlyScalarType(t *testing.T, src string) *ast.ScalarType {
+	t.Helper()
+	f, _, err := Parse("test.c", src)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(f.Decls) != 1 {
+		t.Fatalf("got %d declarations, want 1", len(f.Decls))
+	}
+	decl, isVar := f.Decls[0].(*ast.VarDecl)
+	if !isVar {
+		t.Fatalf("got a %T, want a variable declaration", f.Decls[0])
+	}
+	scalar, isScalar := decl.Type.(*ast.ScalarType)
+	if !isScalar {
+		t.Fatalf("got a %T, want a scalar type", decl.Type)
+	}
+	return scalar
+}
+
 // TestScalarTypesComeFromTheTree checks the derivation the closed set of type
 // names rests on: every kind is keyed by its own spelling, no alias has
 // displaced one, and every spelling is one the lexer scans as a keyword, so a
