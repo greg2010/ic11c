@@ -78,7 +78,7 @@ jobs:
         run: scripts/verify-release-linux.sh ic11c
 
       - name: Package
-        run: tar czf "ic11c_Linux_x86_64.tar.gz" ic11c README.md
+        run: tar czf "ic11c_Linux_x86_64.tar.gz" ic11c
 
       # if-no-files-found defaults to warn, so without it an upload whose path
       # matched nothing succeeds and the release publishes without this platform.
@@ -127,7 +127,7 @@ jobs:
       # cannot change under a `macos-latest` that moved architecture. What pins
       # it is the Mach-O assertion in the step above.
       - name: Package
-        run: tar czf "ic11c_Darwin_arm64.tar.gz" ic11c README.md
+        run: tar czf "ic11c_Darwin_arm64.tar.gz" ic11c
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

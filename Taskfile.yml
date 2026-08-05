@@ -321,13 +321,12 @@ tasks:
     vars:
       # One line per file outside this one that names the decompiled tree, each
       # the file and the text it has to contain. None can read a task variable.
-      # Three name a target rather than a path, so moving GAMESRC_ROOT rewrites
-      # every other line here and renames none of those.
+      # One names a target rather than a path, so moving GAMESRC_ROOT rewrites
+      # every other line here and renames that one not at all.
       GAMESRC_SPELLED: |-
         .gitignore /{{.GAMESRC_ROOT}}/
         .dockerignore {{.GAMESRC_ROOT}}/
         Dockerfile /out/{{.GAMESRC_ROOT}}
-        README.md check:{{.GAMESRC_ROOT}}
         scripts/check-game-pin.sh task {{.GAMESRC_ROOT}}
         .github/workflows/ci.yml {{.GAMESRC_DEST}}
         .github/workflows/ci.yml {{.GAMESRC_FULL}}
@@ -339,11 +338,6 @@ tasks:
         tools/isagen/main.go {{.GAMESRC_DIGEST}}
         tools/isagen/limits_test.go "{{.GAMESRC_ROOT}}", "source"
         tools/isagen/limits_test.go "{{.GAMESRC_ROOT}}", "source-full"
-        docs/building.md {{.GAMESRC_DIGEST}}
-        docs/game-updates.md {{.GAMESRC_DIGEST}}
-        docs/game-updates.md {{.GAMESRC_ROOT}}/source-old
-        docs/game-updates.md {{.GAMESRC_ROOT}}/source-new
-        docs/testing.md {{.GAMESRC_ROOT}}
     cmds:
       # This file is the one place the tree's name is written rather than copied,
       # and is skipped for that reason: left in the scan it would be reported as

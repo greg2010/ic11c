@@ -5,6 +5,10 @@
 # --dry alone. bash rather than sh, for the pipefail those blocks use.
 set -euo pipefail
 
+# Task colours its output on a CI runner. The sed and awk below anchor on the
+# uncoloured shapes.
+export NO_COLOR=1
+
 task_exe="${1:?the task executable to drive the dry run with}"
 
 # The wrapper rather than a shellcheck on PATH; see the head of that script.

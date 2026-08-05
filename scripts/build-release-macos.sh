@@ -40,8 +40,9 @@ export CGO_CXXFLAGS="-std=c++17"
 # The bottle carries no per-component dylibs, so each -lLLVMFoo resolves to an
 # archive unambiguously, and ld64 resolves archive cycles without --start-group.
 # zstd is a Homebrew dependency rather than an OS library, so it is named by
-# path. libc++ stays dynamic: Homebrew's LLVM is built against the SDK's copy.
-export CGO_LDFLAGS="-L${libdir} -Wl,-dead_strip ${libs} ${zstd} -lz -lm -lc++"
+# path. libc++ and libffi stay dynamic, from the SDK, which is what Homebrew's
+# LLVM was built against; libLLVMInterpreter calls into ffi.
+export CGO_LDFLAGS="-L${libdir} -Wl,-dead_strip ${libs} ${zstd} -lz -lm -lffi -lc++"
 
 # byollvm suppresses the binding layer's own flags, whose baked darwin paths
 # name /opt/homebrew/opt/llvm@22, a directory Homebrew never creates. netgo and

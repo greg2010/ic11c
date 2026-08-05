@@ -56,8 +56,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 	mkdir -p /out; \
 	scripts/build-release-linux.sh /out/ic11c; \
 	scripts/verify-release-linux.sh /out/ic11c; \
-	cp README.md /out/; \
-	tar czf /out/ic11c_Linux_x86_64.tar.gz -C /out ic11c README.md
+	tar czf /out/ic11c_Linux_x86_64.tar.gz -C /out ic11c
 
 # BuildKit writes a scratch stage straight onto the host with `--output`, landing
 # the files owned by whoever ran the build. A bind mount written from inside the
@@ -153,8 +152,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 	mkdir -p /out; \
 	scripts/build-release-windows.sh /out/ic11c.exe; \
 	scripts/verify-release-windows.sh /out/ic11c.exe; \
-	cp README.md /out/; \
-	(cd /out && zip -q ic11c_Windows_x86_64.zip ic11c.exe README.md)
+	(cd /out && zip -q ic11c_Windows_x86_64.zip ic11c.exe)
 
 FROM scratch AS artifact-windows
 COPY --from=build-windows /out/ic11c_Windows_x86_64.zip /

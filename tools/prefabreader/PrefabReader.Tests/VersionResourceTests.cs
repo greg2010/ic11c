@@ -393,6 +393,7 @@ public class VersionResourceTests
     // than implements, so they guard a change of framework, not a malformed
     // input. Each holds the type raised and not the sentence, the sentence being
     // framework prose, and each asks a bound so that refusing all is not a pass.
+    // The object-file one holds the outcome instead, for the reason it gives.
 
     [Fact]
     public void TheFrameworkTakesTheSectionCountUpToTheSignBitAndRefusesPastIt()
@@ -408,7 +409,21 @@ public class VersionResourceTests
     {
         Assert.Null(Read(ObjectFile(0), out Checks.FileVersion version));
         Assert.Equal(Stamped, version);
-        Assert.IsType<BadImageFormatException>(Refused(ObjectFile(PE32Width)));
+        Assert.Equal(default, Answered(ObjectFile(PE32Width)));
+    }
+
+    // The version a reading answers, or none where it refuses. .NET 9 refuses by
+    // finding no resource section, .NET 10 by raising.
+    private static Checks.FileVersion Answered(byte[] image)
+    {
+        try
+        {
+            return Read(image, out Checks.FileVersion version) is null ? version : default;
+        }
+        catch (BadImageFormatException)
+        {
+            return default;
+        }
     }
 
     [Fact]
