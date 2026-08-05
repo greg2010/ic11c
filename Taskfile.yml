@@ -1,0 +1,658 @@
+version: '3'
+
+vars:
+  LLVM_VERSION:
+    sh: cat .llvm-version
+  GO_TAGS: llvm{{.LLVM_VERSION}}
+  LINT_ARGS: ''
+  EPHEMERAL_COV: .coverage-ephemeral.out
+  # A deadlock backstop rather than a budget, and `go test` applies it per
+  # package. One value, because one target runs every package and none of them
+  # may disagree about how long a package may take.
+  TEST_TIMEOUT: 900s
+  CORPUS_ROOT: internal/corpus
+  # Two levels below internal/ so that compile_flags.txt beside them resolves
+  # -include ../../ic10/generated/ic10_prelude.h.
+  CORPUS_PROGRAMS: '{{.CORPUS_ROOT}}/programs'
+  # Empty selects the depot manifest the Dockerfile pins. Set it on the isa:csharp
+  # targets to look at a game build before deciding whether to move that pin.
+  MANIFEST: ''
+  # Nothing under here is checked in -- .gitignore covers the whole directory --
+  # and `task gamesrc` rebuilds all of it from the manifest the Dockerfile pins.
+  GAMESRC_ROOT: gamesrc
+  # What `isagen dump` writes: the fingerprinted types alone, which is what a
+  # reviewer diffs across two game builds.
+  GAMESRC_DEST: '{{.GAMESRC_ROOT}}/source'
+  # The whole decompiled assembly, which tools/chipgen cuts the compile unit from.
+  GAMESRC_FULL: '{{.GAMESRC_ROOT}}/source-full'
+  # Taken over the two trees above and only meaningful beside them: it says which
+  # build they came from.
+  GAMESRC_DIGEST: '{{.GAMESRC_ROOT}}/csharp.digest'
+  CHIP_DEST: '{{.GAMESRC_ROOT}}/chip'
+  # Under GAMESRC_ROOT so that the one .gitignore entry covers it.
+  GAMESRC_STAGE: '{{.GAMESRC_ROOT}}/.rebuild'
+  GAMESRC_STAGE_DEST: '{{.GAMESRC_STAGE}}/source'
+  GAMESRC_STAGE_FULL: '{{.GAMESRC_STAGE}}/source-full'
+  # The digest stage writes /out/gamesrc/csharp.digest, so a local export
+  # reproduces that prefix under whichever destination it is given.
+  GAMESRC_STAGE_DIGEST: '{{.GAMESRC_STAGE}}/{{.GAMESRC_DIGEST}}'
+  # Written once every export has succeeded and removed only after the last of
+  # them has been moved in, so its presence says a move is outstanding.
+  GAMESRC_STAGED: '{{.GAMESRC_STAGE}}/.complete'
+  # The digest decides what the conformance harness's answers are, so a rebuilt
+  # tag would make a divergence found under it unreproducible. The full image
+  # rather than -slim carries csc, and csc rather than mcs because the decompiler
+  # emits C# 8 that mcs 7.3 cannot read.
+  MONO_IMAGE: mono:6.12@sha256:34d816779b1248b5cfd095770b64ecbaf1798e2aca693a91c11a018dce9c7ad5
+  # Pinned here rather than in the workflow so that CI and a local `task lint`
+  # cannot disagree, and so a tool release cannot break master on its own.
+  GOLANGCI_LINT_VERSION: v2.12.2
+  GOPLS_VERSION: v0.21.1
+  ACTIONLINT_VERSION: v1.7.12
+  HADOLINT_IMAGE: hadolint/hadolint:v2.15.1-alpine@sha256:a1d49ae1a4e83c1dbad26b8c1ad7588c8bd1e04f4866b34ad3cac50335198552
+
+tasks:
+  default:
+    desc: Run the default goal (lint)
+    deps: [lint]
+
+  build:
+    desc: Build the compiler
+    cmds:
+      - go build -tags "{{.GO_TAGS}}" -o bin/ic11c ./cmd/ic11c
+
+  build:static:
+    desc: Build a statically linked compiler into bin/ (needs the LLVM static component archives)
+    # Separate from `build` rather than replacing it: the static link reads every
+    # LLVM component archive instead of one shared object. bin/ and no VERSION,
+    # because what comes out reports "dev"; dist/ is for artifacts a release gate
+    # has certified. docs/building.md says which platforms can link this at all.
+    env:
+      # Unset here the script would read .llvm-version itself, and then
+      # `task build:static LLVM_VERSION=21` would build against 21 and hold the
+      # result to 22.
+      LLVM_VERSION: '{{.LLVM_VERSION}}'
+    cmds:
+      - ./scripts/build-release-linux.sh bin/ic11c
+
+  release:linux:
+    desc: Build the Linux release artifact into dist/ (needs only docker; set VERSION)
+    requires:
+      vars: [VERSION]
+    # check:llvm holds .llvm-version to a bare major, so a release cannot be
+    # built from a value the container's scripts would have refused.
+    deps: [check:llvm]
+    # Through the environment rather than the command line: a template expansion
+    # is textual and happens before the command is parsed, so a value carrying a
+    # space would split into further docker arguments and one carrying a quote
+    # would close the quoting around it.
+    env:
+      LLVM_VERSION: '{{.LLVM_VERSION}}'
+      VERSION: '{{.VERSION}}'
+    cmds:
+      # The base image is pinned by digest, so --pull would refresh nothing.
+      # What still moves is apt.llvm.org, a rolling snapshot behind a layer whose
+      # cache key is the instruction text: nothing else here invalidates it, so a
+      # local tree could otherwise link current source against months-old LLVM.
+      - >-
+        docker build --no-cache-filter linux-toolchain --target artifact-linux
+        --build-arg LLVM_VERSION --build-arg VERSION
+        --output type=local,dest=dist .
+
+  release:windows:
+    desc: Build the Windows release artifact into dist/ (needs only docker; set VERSION)
+    requires:
+      vars: [VERSION]
+    deps: [check:llvm]
+    # Through the environment, for the reason the Linux target says.
+    env:
+      LLVM_VERSION: '{{.LLVM_VERSION}}'
+      VERSION: '{{.VERSION}}'
+    cmds:
+      # No refresh of the toolchain stage, unlike the Linux target: every archive
+      # it unpacks is pinned by scripts/msys2-ucrt64.lock, so a cached layer and
+      # a cold one hold the same toolchain.
+      - >-
+        docker build --target artifact-windows
+        --build-arg LLVM_VERSION --build-arg VERSION
+        --output type=local,dest=dist .
+
+  msys2:lock:
+    desc: Re-pin the MSYS2 packages the Windows release toolchain unpacks
+    cmds:
+      # Read the diff. MSYS2 moving to the next LLVM major stops this rather than
+      # writing a lock the container would then refuse.
+      - ./scripts/msys2-lock.sh
+
+  test:
+    desc: Run the test suite over every package (needs docker, a decompiled game source, and clang or gcc)
+    # Built first rather than left to the caller: most of the suite has no other
+    # oracle, and internal/chiptest fails rather than skips without one.
+    deps: [chip:build]
+    # Anchored because `task cov:gen` hands the same chip to the same packages
+    # and a second spelling of these three would be a second chip.
+    env: &CHIP_ENV
+      # Without this internal/chip's own tests skip; with it, every other problem
+      # is a failure. Nothing can pass by not running.
+      IC11C_CHIP: '1'
+      # The same digest chip:build compiled against, and the driver refuses a tag
+      # not pinned by one, so the two cannot drift apart silently.
+      IC11C_CHIP_IMAGE: '{{.MONO_IMAGE}}'
+      # Absolute, because `go test` runs the binary from the package directory
+      # and a relative path would resolve under the package under test.
+      IC11C_CHIP_BIN: '{{.ROOT_DIR}}/{{.CHIP_DEST}}/bin'
+    cmds:
+      # ./... and nothing subtracted: a package left out here is one nothing
+      # local covers. -count=1 because the gates over the decompiled tree take a
+      # directory rather than the repository as their subject, so a cached answer
+      # can be about a game build no longer on the machine.
+      - >-
+        go test -tags "{{.GO_TAGS}}" -race -count=1 -timeout {{.TEST_TIMEOUT}}
+        -coverprofile=coverage.out ./...
+
+  corpus:measure:
+    desc: Compile the corpus in every mode and configuration and print what each costs
+    # From the package directory, because `go test` given a package pattern
+    # keeps a passing package's output to itself and the report is the whole
+    # point of the run.
+    dir: cmd/ic11c
+    silent: true
+    cmds:
+      # The report is a pure function of the tree, so two runs diff to what moved
+      # between them; `go test`'s own closing lines carry wall clock and are
+      # filtered out. grep exits 1 selecting nothing, which under pipefail would
+      # fail a run the filter emptied. Status 2 is a real error and still aborts.
+      - |
+        set -o pipefail
+        go test -tags "{{.GO_TAGS}}" -count=1 -timeout {{.TEST_TIMEOUT}} \
+          -run '^TestCorpusMeasurements$' -measure-corpus \
+          | { grep -vE '^(PASS$|ok  )' || [ "$?" -eq 1 ]; }
+
+  equivalence:baseline:
+    desc: Re-measure what each fixture writes and rewrite the equivalence baseline
+    cmds:
+      # Read the diff. A green run afterwards has only established that the
+      # corpus agrees with what it was just told to expect.
+      - >-
+        go test -tags "{{.GO_TAGS}}" -timeout {{.TEST_TIMEOUT}} ./cmd/ic11c/
+        -run TestOptimizedAgreesWithUnoptimized -update-baseline
+
+  refusal:witnesses:
+    desc: Re-derive the program witnessing each entry of the generated-program refusal registry
+    cmds:
+      # Read the diff. A witness that had to move is a change in what the
+      # optimizer forms, and an entry the search could not meet at all is one to
+      # delete rather than to re-run this until it finds something.
+      - >-
+        go test -tags "{{.GO_TAGS}}" -timeout {{.TEST_TIMEOUT}} ./cmd/ic11c/
+        -run TestRefusalRegistryStillRefuses -update-refusal-witnesses
+
+  clang:baseline:
+    desc: Re-measure what each program's native build writes and rewrite the clang baseline
+    cmds:
+      # Read the diff, for the reason equivalence:baseline gives.
+      - >-
+        go test -tags "{{.GO_TAGS}}" -timeout {{.TEST_TIMEOUT}} ./cmd/ic11c/
+        -run TestCompiledProgramsAgreeWithClang -update-clang-baseline
+
+  llvmopt:
+    desc: Run the LLVM optimizer round-trip tests
+    cmds:
+      - go test -tags "{{.GO_TAGS}}" -timeout 60s ./internal/llvmopt/...
+
+  lint:
+    desc: Run golangci-lint and gopls diagnostics
+    cmds:
+      # Both halves run whatever the first found, and the verdict is taken
+      # afterwards: as two commands the second is a gate the first one failing
+      # silently switches off. Without the issue caps golangci-lint truncates at
+      # 3 issues per linter and 3 per message, which reads as clean when it is not.
+      - |
+        failed=0
+        golangci-lint run --build-tags "{{.GO_TAGS}}" --max-issues-per-linter 0 --max-same-issues 0 {{.LINT_ARGS}} || failed=1
+        GO_TAGS="{{.GO_TAGS}}" ./scripts/gopls-check.sh || failed=1
+        exit "$failed"
+
+  tools:
+    desc: Install the pinned lint tooling
+    cmds:
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
+      - go install golang.org/x/tools/gopls@{{.GOPLS_VERSION}}
+      - task: tools:actionlint
+
+  tools:actionlint:
+    desc: Install the pinned actionlint
+    # Its own target because the job that lints the build machinery needs this
+    # and neither of the two above, which are what `task lint` runs.
+    cmds:
+      - go install github.com/rhysd/actionlint/cmd/actionlint@{{.ACTIONLINT_VERSION}}
+
+  lint:shell:
+    desc: Shellcheck every script under scripts/ (needs docker)
+    cmds:
+      # -x so the shared helpers are read in the context of each caller rather
+      # than skipped.
+      - ./scripts/shellcheck.sh -x --source-path=SCRIPTDIR scripts/*.sh
+
+  lint:workflows:
+    desc: Lint the workflow and action YAML, and the shell in every run block (needs docker)
+    cmds:
+      # actionlint silently lints only the YAML when the shellcheck it is told to
+      # use is absent, which would leave the gate reporting success over the half
+      # that matters. So the wrapper is first made to report a defect it is
+      # handed: exiting 0 is what a missing binary and a clean run share.
+      - |
+        answered=0
+        printf 'cd /tmp\n' | ./scripts/shellcheck.sh --shell=bash - >/dev/null 2>&1 || answered="$?"
+        if [ "$answered" -ne 1 ]; then
+          echo "the shellcheck wrapper did not report a defect it was handed; actionlint would check the YAML and skip every run block" >&2
+          exit 1
+        fi
+        actionlint -shellcheck=./scripts/shellcheck.sh
+
+  lint:taskfile:
+    desc: Shellcheck the command blocks in this file (needs docker)
+    cmds:
+      - ./scripts/lint-taskfile.sh {{.TASK_EXE}}
+
+  lint:container:
+    desc: Lint the Dockerfile, and the shell in every RUN instruction
+    cmds:
+      # The ignored rules are deliberate: --platform is pinned because the
+      # artifacts are named for one architecture (DL3029), apt versions cannot be
+      # pinned against a rolling snapshot (DL3008), the RUN pipelines set their
+      # own -e (DL4006), and the one cd is a subshell around a zip (DL3003).
+      - >-
+        docker run --rm -i {{.HADOLINT_IMAGE}} hadolint --no-color
+        --ignore DL3029 --ignore DL3008 --ignore DL4006 --ignore DL3003 - < Dockerfile
+
+  fmt:
+    desc: Format all Go source
+    cmds:
+      - gofmt -w .
+
+  fmt:check:
+    desc: Fail if any Go source is unformatted
+    cmds:
+      - |
+        unformatted="$(gofmt -l .)"
+        if [ -n "$unformatted" ]; then
+          echo "$unformatted"
+          exit 1
+        fi
+
+  tidy:
+    desc: Tidy the module
+    cmds:
+      - go mod tidy
+
+  check:
+    desc: Every gate (needs docker, the network, a decompiled game source, the .NET SDK, and clang or gcc)
+    cmds:
+      - task: fmt:check
+      - task: check:llvm
+      - task: check:gamesrc
+      - task: check:game-pin
+      - task: check:corpus
+      - task: lint
+      # lint:workflows and lint:container stay out: the first needs actionlint
+      # from a tools target this does not run, and both read CI's own plumbing,
+      # which ci.yml lints in the machinery job.
+      - task: lint:shell
+      - task: lint:taskfile
+      - task: test
+      - task: check:gamesrc-gates
+      - task: check:codegen
+      - task: prefabreader:build
+      - task: prefabreader:test
+
+  check:llvm:
+    desc: Fail if anything names a libLLVM major other than the one .llvm-version holds
+    cmds:
+      - ./scripts/check-llvm-version.sh
+
+  check:gamesrc-gates:
+    desc: Fail unless every gate reading the decompiled game source ran, passed, and still needs a tree
+    cmds:
+      - ./scripts/check-gamesrc-gates.sh
+
+  check:gamesrc:
+    desc: Fail if anything outside this file spells the decompiled tree somewhere GAMESRC_ROOT cannot reach
+    vars:
+      # One line per file outside this one that names the decompiled tree, each
+      # the file and the text it has to contain. None can read a task variable.
+      # Three name a target rather than a path, so moving GAMESRC_ROOT rewrites
+      # every other line here and renames none of those.
+      GAMESRC_SPELLED: |-
+        .gitignore /{{.GAMESRC_ROOT}}/
+        .dockerignore {{.GAMESRC_ROOT}}/
+        Dockerfile /out/{{.GAMESRC_ROOT}}
+        README.md check:{{.GAMESRC_ROOT}}
+        scripts/check-game-pin.sh task {{.GAMESRC_ROOT}}
+        .github/workflows/ci.yml {{.GAMESRC_DEST}}
+        .github/workflows/ci.yml {{.GAMESRC_FULL}}
+        .github/workflows/ci.yml {{.GAMESRC_DIGEST}}
+        tools/chipgen/digest.go {{.GAMESRC_ROOT}}/
+        tools/chipgen/main.go {{.GAMESRC_FULL}}
+        tools/chipgen/main.go {{.CHIP_DEST}}
+        tools/chipgen/slice.digest {{.GAMESRC_ROOT}}/
+        tools/isagen/main.go {{.GAMESRC_DIGEST}}
+        tools/isagen/limits_test.go "{{.GAMESRC_ROOT}}", "source"
+        tools/isagen/limits_test.go "{{.GAMESRC_ROOT}}", "source-full"
+        docs/building.md {{.GAMESRC_DIGEST}}
+        docs/game-updates.md {{.GAMESRC_DIGEST}}
+        docs/game-updates.md {{.GAMESRC_ROOT}}/source-old
+        docs/game-updates.md {{.GAMESRC_ROOT}}/source-new
+        docs/testing.md {{.GAMESRC_ROOT}}
+    cmds:
+      # This file is the one place the tree's name is written rather than copied,
+      # and is skipped for that reason: left in the scan it would be reported as
+      # a copy nothing accounts for.
+      - |
+        ./scripts/check-spelled-path.sh 'the decompile' '{{.GAMESRC_ROOT}}' Taskfile.yml <<'ACCOUNTED'
+        {{.GAMESRC_SPELLED}}
+        ACCOUNTED
+
+  check:game-pin:
+    desc: Fail if Steam serves a game build other than the one the Dockerfile pins (needs docker and the network)
+    # Asks and does not rebuild: a rebuild would run for a very long time with no
+    # warning and move the device tables under a test run already going.
+    cmds:
+      # Exit 2 is the depot not having answered, which says nothing about the
+      # pin, and failing over a Steam outage teaches people to stop reading this.
+      # The weekly game-pin workflow fails on either status, so a depot that
+      # stays unreachable is still caught.
+      - |
+        status=0
+        ./scripts/check-game-pin.sh {{.TASK_EXE}} || status="$?"
+        if [ "$status" -eq 2 ]; then
+          echo "not failing check over a depot that did not answer; whether the game source is current is unknown" >&2
+          status=0
+        fi
+        exit "$status"
+
+  check:corpus:
+    desc: Fail if anything outside this file spells the fixture corpus somewhere CORPUS_PROGRAMS cannot reach
+    vars:
+      # internal/corpus's ModulePath is the authority every Go caller reads;
+      # scripts/verify-release-compiles.sh is a copy, because shell cannot import
+      # a Go constant. Two entries still earn the second direction: what it
+      # catches is a third copy in a file nobody thought to look at.
+      CORPUS_SPELLED: |-
+        internal/corpus/corpus.go {{.CORPUS_PROGRAMS}}
+        scripts/verify-release-compiles.sh {{.CORPUS_PROGRAMS}}
+    cmds:
+      # Nothing is skipped the way this file is in `task check:gamesrc`: a file
+      # spelling the whole programs path rather than composing it from the root
+      # is one more copy of exactly what this holds, this file included.
+      - |
+        ./scripts/check-spelled-path.sh 'the fixture corpus' '{{.CORPUS_PROGRAMS}}' <<'ACCOUNTED'
+        {{.CORPUS_SPELLED}}
+        ACCOUNTED
+
+  check:codegen:
+    desc: Fail if a checked-in generated file differs from what the generator writes now, or shares a Go package with hand-written source
+    cmds:
+      - ./scripts/check-codegen.sh
+
+  isa:
+    desc: Regenerate the machine tables from the game assembly (needs docker)
+    cmds:
+      - task: isa:extract
+      - task: isa:generate
+
+  isa:extract:
+    desc: Fetch and decompile the game assembly in Docker and rewrite the ISA JSON
+    cmds:
+      # The stage writes internal/isa/isa.json, so the destination is the module
+      # root.
+      - >-
+        docker build --target isa-artifact
+        --output type=local,dest=. .
+
+  isa:generate:
+    desc: Generate Go tables from the checked-in ISA data
+    cmds:
+      - go run ./tools/isagen generate
+
+  isa:manifest:
+    desc: Print the depot manifest gid Steam serves now, which the pin is compared against
+    silent: true
+    cmds:
+      # Quiet, and its image id discarded, so that the gid is the whole output.
+      - docker build --quiet --target isa-tools --tag ic11c-isa-tools . > /dev/null
+      # -manifest-only fetches the file index and no content. The capture is
+      # asserted rather than printed: a DepotDownloader whose output this pattern
+      # no longer matches exits 0 printing nothing, and an empty answer would
+      # otherwise read as the gid. The digit test rejects a multi-line capture too.
+      - >-
+        docker run --rm --entrypoint bash ic11c-isa-tools -c
+        'set -euo pipefail;
+        gid="$(dotnet /opt/depotdownloader/DepotDownloader.dll
+        -app "${STEAM_APP}" -depot "${STEAM_DEPOT}" -manifest-only -dir /tmp/manifest
+        | sed -n "s/^Manifest \([0-9][0-9]*\) .*/\1/p")";
+        case "${gid}" in
+        "" | *[!0-9]*) echo "no single manifest gid in the DepotDownloader output" >&2; exit 1 ;;
+        esac;
+        printf "%s\n" "${gid}"'
+
+  isa:csharp:
+    desc: Rewrite the C# digest of the game types hand-written Go transliterates (needs docker)
+    env:
+      STEAM_MANIFEST: '{{.MANIFEST}}'
+    cmds:
+      # Not part of `task isa` or the `task check` gates on purpose: a game update
+      # that changes transliterated behaviour needs a human reading a diff.
+      # DIGEST_ROOT defaults to the module root, and `task gamesrc` overrides it
+      # to stage the digest beside the trees it fingerprints.
+      - >-
+        docker build --target isa-digest-artifact
+        {{if .MANIFEST}}--build-arg STEAM_MANIFEST{{end}}
+        --output type=local,dest="{{.DIGEST_ROOT | default "."}}" .
+
+  isa:csharp:source:
+    desc: Write the decompiled C# behind that digest into GAMESRC_DEST (needs docker)
+    env:
+      STEAM_MANIFEST: '{{.MANIFEST}}'
+    cmds:
+      - >-
+        docker build --target isa-source-artifact
+        {{if .MANIFEST}}--build-arg STEAM_MANIFEST{{end}}
+        --output type=local,dest="{{.GAMESRC_DEST}}" .
+
+  isa:csharp:source-full:
+    desc: Write the whole decompiled assembly into GAMESRC_FULL (needs docker)
+    env:
+      STEAM_MANIFEST: '{{.MANIFEST}}'
+    cmds:
+      # Exported from the decompile stage rather than the Go one, so a game build
+      # that stopped extraction still yields the source a reviewer needs to see
+      # why.
+      - >-
+        docker build --target isa-source-full-artifact
+        {{if .MANIFEST}}--build-arg STEAM_MANIFEST{{end}}
+        --output type=local,dest="{{.GAMESRC_FULL}}" .
+
+  gamesrc:
+    desc: Rebuild the whole decompiled game source tree from the pinned manifest (needs docker)
+    # Built beside the live set and moved in only once all three have succeeded.
+    # BuildKit's local exporter removes nothing, so exporting over the previous
+    # tree would leave a file the game deleted between two manifests; clearing it
+    # first would mean a failed run leaves no decompile at all.
+    cmds:
+      # Before the rebuild as well as after: an interrupt partway through a move
+      # leaves the rest staged, and finishing it against the trees it belongs to
+      # has to happen before the stage is cleared for the next set.
+      - task: gamesrc:finish
+      - rm -rf "{{.GAMESRC_STAGE}}"
+      - task: isa:csharp:source
+        vars:
+          GAMESRC_DEST: '{{.GAMESRC_STAGE_DEST}}'
+      - task: isa:csharp:source-full
+        vars:
+          GAMESRC_FULL: '{{.GAMESRC_STAGE_FULL}}'
+      # Staged with the trees rather than written where isa:csharp puts it by
+      # default: it is the only thing saying which build they came from, and the
+      # whole directory is gitignored, so a digest describing one manifest beside
+      # a decompile of another is a state nothing would report.
+      - task: isa:csharp
+        vars:
+          DIGEST_ROOT: '{{.GAMESRC_STAGE}}'
+      - touch "{{.GAMESRC_STAGED}}"
+      - task: gamesrc:finish
+      # chip/ is deliberately not rebuilt: `task chip:slice` derives it from
+      # source-full and needs the Go toolchain and libLLVM, where this needs
+      # docker and nothing else.
+
+  gamesrc:finish:
+    desc: Move a staged `task gamesrc` rebuild into place, completing one an interrupt left half moved
+    # Called twice in one `task gamesrc` and has to run both times.
+    run: always
+    # Three renames, because nothing moves two directories and a file as a unit.
+    # The marker stands in for that: written once every export has succeeded and
+    # removed only after the last rename, so while it exists the stage holds
+    # whatever has not landed and running this again finishes an interrupted move.
+    cmds:
+      - |
+        if [ ! -e "{{.GAMESRC_STAGED}}" ]; then
+          exit 0
+        fi
+        echo "a staged rebuild has not been moved in; finishing it" >&2
+        # Taken down before either tree moves and put back after both, so no
+        # interrupt leaves it naming a build the trees beside it did not come
+        # from. Guarded on the staged copy still existing: an interrupt after the
+        # last rename leaves the marker over an empty stage.
+        if [ -e "{{.GAMESRC_STAGE_DIGEST}}" ]; then
+          rm -f "{{.GAMESRC_DIGEST}}"
+        fi
+        # Removed and moved one at a time rather than all removed first: the
+        # staged copy is the only fresh one and stays where it is until the
+        # rename lands, so no interrupt reaches a point where neither exists.
+        move() {
+          if [ ! -e "$1" ]; then
+            return 0
+          fi
+          rm -rf "$2"
+          mv "$1" "$2"
+          echo "moved $2 into place" >&2
+        }
+        # The one window left open is between these two: source from the new
+        # manifest beside source-full from the old, which different gates would
+        # then answer for. Running this again resolves it, and the marker says so
+        # meanwhile.
+        move "{{.GAMESRC_STAGE_DEST}}" "{{.GAMESRC_DEST}}"
+        move "{{.GAMESRC_STAGE_FULL}}" "{{.GAMESRC_FULL}}"
+        move "{{.GAMESRC_STAGE_DIGEST}}" "{{.GAMESRC_DIGEST}}"
+        rm -rf "{{.GAMESRC_STAGE}}"
+
+  chip:slice:
+    desc: Cut the standalone IC10 chip out of the decompiled game source into CHIP_DEST
+    cmds:
+      # No `sources`/`generates` fingerprint: the inputs are three and a half
+      # thousand decompiled files, so it would cost more to compute than the
+      # slice does to run.
+      - >-
+        go run -tags "{{.GO_TAGS}}" ./tools/chipgen slice
+        --source "{{.GAMESRC_FULL}}" --out "{{.CHIP_DEST}}"
+
+  chip:build:
+    desc: Build the conformance chip binary from that slice (needs docker)
+    # The slice runs first every time rather than being left to the caller: it is
+    # what refuses a game update that moved something, and a build over a stale
+    # output directory would compile cleanly and answer for a version nobody runs.
+    deps: [chip:slice]
+    cmds:
+      - mkdir -p "{{.CHIP_DEST}}/bin"
+      # -langversion:9.0 rather than latest, which moves with the image: the unit
+      # is the game's own text and is held to the language the decompiler wrote
+      # it in. The units come from the response file the slicer writes, because a
+      # unit it started writing would otherwise simply not be compiled.
+      - >-
+        docker run --rm
+        -v "$PWD/{{.CHIP_DEST}}:/src:ro"
+        -v "$PWD/{{.CHIP_DEST}}/bin:/out"
+        -w /src {{.MONO_IMAGE}}
+        csc -nologo -langversion:9.0 -optimize+ -out:/out/chip.exe
+        @sources.rsp
+
+  chip:run:
+    desc: Drive the conformance chip binary over stdin (needs docker; run chip:build first)
+    # Interactive because the binary is a server: one command per line, one line
+    # per answer, thousands of programs through the one process. A process per
+    # program costs about half a second of runtime startup, three orders of
+    # magnitude more than running a program takes.
+    cmds:
+      - >-
+        docker run --rm -i
+        -v "$PWD/{{.CHIP_DEST}}/bin:/out:ro"
+        {{.MONO_IMAGE}} mono /out/chip.exe
+
+  prefabreader:build:
+    desc: Build the prefab reader the extraction's device roster comes from (needs the .NET SDK)
+    cmds:
+      # The project, not the directory: the test project sits under it, and the
+      # exclusion keeping the SDK's recursive source glob from compiling that
+      # into the reader is only exercised by building the reader itself. Release
+      # because that is what the image publishes.
+      - dotnet build -c Release tools/prefabreader/PrefabReader.csproj
+
+  prefabreader:test:
+    desc: Run the prefab reader's tests (needs the .NET SDK)
+    cmds:
+      # The test project by path: `dotnet test` pointed at tools/prefabreader
+      # finds only the reader there, runs nothing and exits 0. An assembly
+      # holding no tests exits 1, so naming it cannot be emptied quietly either.
+      # The session timeout is a deadlock backstop rather than a budget.
+      - >-
+        dotnet test -c Release tools/prefabreader/PrefabReader.Tests/PrefabReader.Tests.csproj
+        -- RunConfiguration.TestSessionTimeout=60000
+
+  cov:gen:
+    desc: Generate a sanitized coverage profile over every package
+    # The same set and the same chip `task test` runs, so what a browser shows is
+    # what the gate measured.
+    deps: [chip:build]
+    env: *CHIP_ENV
+    silent: true
+    cmds:
+      - echo "==> Generating coverage profile..."
+      # No -race: this profile is read rather than gated on, and the detector
+      # buys it nothing while roughly doubling what it costs to produce.
+      - >-
+        go test -tags "{{.GO_TAGS}}" -count=1 -timeout {{.TEST_TIMEOUT}}
+        -coverprofile={{.EPHEMERAL_COV}} ./...
+      - echo "==> Sanitizing generated artifacts..."
+      # grep exits 1 selecting nothing; status 2 is a real failure and aborts.
+      # The mode line is asserted afterwards because it is the one line the
+      # filter cannot legitimately drop, and a profile without it is malformed
+      # rather than empty: gocovsh and `go tool cover` both refuse it.
+      - |
+        grep -v "\.gen\.go:" {{.EPHEMERAL_COV}} > {{.EPHEMERAL_COV}}.clean || [ "$?" -eq 1 ]
+        if ! head -n 1 {{.EPHEMERAL_COV}}.clean | grep -q '^mode: '; then
+          echo "the sanitized profile has no mode line; nothing can read it" >&2
+          exit 1
+        fi
+        mv {{.EPHEMERAL_COV}}.clean {{.EPHEMERAL_COV}}
+
+  cov:
+    desc: Browse coverage for all files
+    deps: [cov:gen]
+    silent: true
+    cmds:
+      - echo "==> Launching gocovsh (all)..."
+      - go tool gocovsh --profile {{.EPHEMERAL_COV}}
+
+  cov:new:
+    desc: Browse coverage for changed files
+    deps: [cov:gen]
+    silent: true
+    cmds:
+      - echo "==> Launching gocovsh (changed files)..."
+      # Task applies errexit but not pipefail, so without this a failed
+      # enumeration browses as no changed files rather than as an error.
+      - set -o pipefail; { git diff --name-only HEAD && git ls-files --others --exclude-standard; } | go tool gocovsh --profile {{.EPHEMERAL_COV}}
+
+  clean:
+    desc: Remove build output
+    cmds:
+      - rm -rf bin dist

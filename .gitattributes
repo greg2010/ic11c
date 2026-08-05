@@ -1,0 +1,10 @@
+# Every file is checked out byte for byte on every platform.
+#
+# Windows runners ship core.autocrlf=true, which would otherwise rewrite line
+# endings on the way out of git. Two things here cannot survive that: the
+# release verification digests the assembly each platform compiles the fixture
+# corpus to and requires the three to be identical, which a rewritten fixture
+# would make a property of the checkout rather than of the compiler; and
+# .llvm-version is read by a shell, which would take the carriage return as part
+# of the version.
+* -text

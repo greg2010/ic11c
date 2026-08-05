@@ -1,25 +1,59 @@
 # Build output
 bin/
 
+# Intermediate build output from a local `dotnet build` of the prefab reader.
+# The container builds its own copy and never reads this one.
+obj/
+
 # Release artifacts, from either `task release:` target
 dist/
 
-# Root-anchored binaries left by `go build ./cmd/<name>/` without -o.
+# Root-anchored binaries left by `go build ./cmd/<name>/` or
+# `go build ./tools/<name>/` without -o.
 /ic11c
 /ic11c.exe
+/chipgen
 /isagen
+/nodegen
+
+# What scripts/verify-release-compiles.sh records when CORPUS_MANIFEST names a
+# file: one digest per fixture and emission mode, which the release gates
+# compare across the three platforms. Anchored, so a fixture of this name under
+# a testdata directory is not.
+/corpus-*.txt
+
+# The replacement `task msys2:lock` writes beside the lock before moving it
+# over, so a run that fails partway leaves one a suffix away from the tracked
+# file it would have replaced.
+/scripts/msys2-ucrt64.lock.new
 
 # Test binaries from `go test -c`
 *.test
 
-# Coverage profiles. coverage.out is what `task test` and CI write;
-# .coverage-ephemeral.out is the sanitized profile `task cov` browses.
-coverage.out
-.coverage-ephemeral.out
+# Core dumps from a crashed test binary, which land beside the package. The pid
+# suffix is matched so that a source file named core.something is not.
+core.[0-9]*
 
-# Decompiled game source written by `task isa:csharp:source`. The digest beside
-# it is checked in; this is the game's own code and is not.
-/tools/gamesrc/source*/
+# Coverage profiles. coverage.out is what `task test` and CI write;
+# .coverage-ephemeral.out is the sanitized profile `task cov` browses. The
+# sanitize step writes that profile under a suffix and moves it over, so a run
+# that fails between the two leaves one behind. Matched by prefix, because the
+# suffixed name is derived from the profile's rather than written down.
+coverage.out
+.coverage-ephemeral.out*
+
+# The decompiled game source: the whole assembly under source-full/, the
+# fingerprinted types under source/, the digest taken over them, and the
+# standalone compile unit `task chip:slice` cuts out for `task chip:build`.
+# Twenty-seven megabytes of third-party game code, derived from the manifest the
+# Dockerfile pins by one command, `task gamesrc`. Anchored at the directory
+# rather than at each of its children, so that something new appearing under it
+# is covered without an edit here.
+/gamesrc/
+
+# Scratch space. The IC10 corpus under tmp/ic10-corpus/ is third-party code
+# under assorted licenses and does not belong in this repository's history.
+/tmp/
 
 # Editors and agents
 .vscode/
@@ -27,5 +61,15 @@ coverage.out
 .claude
 .zed
 
+# Task's run-state directory, from the `sources`/`generates` fingerprints on the
+# build targets that declare them.
+.task/
+
 # OS
 .DS_Store
+
+# Assembly written by redirecting the compiler, which only ever emits to stdout.
+# Anchored: unanchored it also shadows the tracked golden files under
+# internal/emit/testdata, so a regenerated one exists locally, passes the test
+# locally, and never reaches CI.
+/*.ic10

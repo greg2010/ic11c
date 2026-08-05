@@ -1,0 +1,33 @@
+name: game pin
+
+# `task check:game-pin` asks this on a machine someone is already working on;
+# this asks it of a tree nobody has touched for a week, which is where a pin goes
+# stale unnoticed. docs/game-updates.md is the procedure for a moved one.
+on:
+  schedule:
+    - cron: '37 5 * * 1'
+  workflow_dispatch:
+
+# Read only, and nothing below writes anywhere else either: what a moved pin
+# needs is a human reading two decompiles against each other, and a branch or
+# pull request opened here would be a change nobody has read.
+permissions:
+  contents: read
+
+jobs:
+  manifest:
+    name: the pin names the build Steam serves
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # `task check:game-pin` passes over a depot that did not answer, because a
+      # local check failing on a Steam outage is a false alarm. Here it fails the
+      # job, since asking is the whole of what this does.
+      - name: Ask Steam what it serves now
+        run: scripts/check-game-pin.sh

@@ -1,0 +1,59 @@
+.git
+.github
+dist/
+/ic11c
+/ic11c.exe
+/chipgen
+/isagen
+/nodegen
+
+# What a release verification records when CORPUS_MANIFEST names a file, and the
+# replacement `task msys2:lock` writes beside the lock before moving it over.
+/corpus-*.txt
+/scripts/msys2-ucrt64.lock.new
+
+# Assembly written by redirecting the compiler, which only ever emits to stdout.
+/*.ic10
+
+# Coverage profiles. The sanitize step writes the ephemeral profile under a
+# suffix and moves it over, so a run that fails between the two leaves one
+# behind; matched by prefix for that reason, as .gitignore matches it.
+coverage.out
+.coverage-ephemeral.out*
+
+# A pattern here is matched against the whole relative path and `*` does not
+# cross a separator, so a bare `bin/` would exclude a root-level one and ship
+# every nested one. All three of these occur nested: bin and obj under
+# tools/prefabreader, left by a local `dotnet build` of the prefab reader, and
+# a test binary beside whichever package `go test -c` built it from.
+**/bin/
+**/obj/
+**/*.test
+
+# Core dumps from a crashed test binary, which land beside the package the
+# binary was built from and are tens of megabytes each. Matched the way
+# .gitignore matches them, by the pid suffix, so that a source file named
+# core.something is not.
+**/core.[0-9]*
+
+# Scratch space, which nothing in the build reads. The IC10 corpus under
+# tmp/ic10-corpus/ is most of its size.
+tmp/
+
+# Task's run-state directory, the agent scratch tree and the editor directories.
+# None is read by any stage, and all of them otherwise land in /src in every
+# build. All four sit at the root, unlike the file macOS leaves in every
+# directory it has opened, which is matched at any depth for the reason the bin
+# and obj patterns above are.
+.task/
+.claude/
+.vscode/
+.idea/
+.zed
+**/.DS_Store
+
+# Decompiled game source a local `task gamesrc` left behind, twenty-seven
+# megabytes of it. Every stage that reads a decompile decompiles its own inside
+# the build, so none of this is an input; without the exclusion it is copied
+# into the context of every image built here.
+gamesrc/

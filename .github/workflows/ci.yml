@@ -1,0 +1,328 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Every action is pinned by commit rather than by the tag it was released under.
+# A major tag is moved onto each release in that line, so a tag is an author's
+# ability to change what runs here after the fact. Dependabot's github-actions
+# updater follows a pinned commit through the version comment beside it.
+
+# A superseded pull request push has nothing left to say, and the Windows
+# container and the macOS runner are the two most expensive things here. A push
+# to master is never cancelled: the release workflow requires a completed ci run
+# for the tagged commit, and a cancelled run is not a passing one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Four jobs carry `task check`, split by toolchain, so a developer runs in one
+# place what CI spreads over four. check:game-pin is the one target left out: the
+# weekly game-pin workflow asks Steam instead. Every job's timeout is a backstop
+# rather than a budget -- GitHub's own default is six hours.
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Both read the tree and nothing else, so they go ahead of the toolchain,
+      # which is minutes of apt. check:llvm is first because what follows
+      # consumes the file it holds every other spelling to.
+      - run: task check:llvm
+      - run: task fmt:check
+
+      - uses: ./.github/actions/setup-llvm
+
+      # golangci-lint-action has no install-only mode, so using it would lint
+      # once in the action and again in `task lint`. Installing through the
+      # Taskfile means CI and a developer get the versions it pins.
+      - run: task tools
+
+      - name: Read the pinned game manifest
+        run: scripts/read-game-manifest.sh
+
+      # The decompile is third-party game code and .gitignore covers all of
+      # gamesrc/, so this job derives it. No restore-keys: a prefix match would
+      # restore a different game's decompile. gamesrc/chip/ is not cached,
+      # because `task test` cuts it on every run to refuse a moved game update.
+      - id: gamesrc
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            gamesrc/source
+            gamesrc/source-full
+            gamesrc/csharp.digest
+          key: gamesrc-${{ env.STEAM_MANIFEST }}-${{ hashFiles('Dockerfile', 'Taskfile.yml', 'tools/isagen/**/*.go') }}
+
+      - name: Decompile the game source
+        if: steps.gamesrc.outputs.cache-hit != 'true'
+        run: task gamesrc
+
+      # After the decompile, which .gitignore covers whole, so nothing it writes
+      # is in what git would show.
+      - run: task check:gamesrc
+      - run: task check:corpus
+
+      - run: task lint
+
+      # Cuts the chip out of the decompiled tree and runs the suite against it,
+      # so compiled programs execute on the game's own machine. Nothing is
+      # conditional on the decompile being present: a cache restore that produced
+      # an unusable tree must fail rather than skip.
+      - run: task test
+
+      # After the run it is about: it asserts over the output of the two packages
+      # `task test` runs and reads only the status of.
+      - run: task check:gamesrc-gates
+
+      # Gates the build, because an upload that cannot work is worth knowing
+      # about and silence is how the previous one went unnoticed. Skipped on a
+      # pull request from a fork, which gets no secrets: gating there would fail
+      # every fork contribution in a step unrelated to its change.
+      - name: Upload coverage
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.out
+          fail_ci_if_error: true
+
+  tables:
+    name: generated tables are current
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Regeneration reads the checked-in ISA data, so this needs no game
+      # install. A diff here means the tables and their source have drifted.
+      - run: task check:codegen
+
+  prefab-reader:
+    name: prefab reader
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # Installed rather than taken from whatever the runner ships, at the
+      # version the release image's SDK pins, which is also the framework both
+      # projects target. Nothing is conditional on a toolchain being present: a
+      # job that steps around an absent SDK is a job that cannot fail.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '9.0.x'
+
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Nothing else builds or runs the reader outside a full Docker extraction,
+      # so a compile error used to reach master and surface hours later as a
+      # failed image build.
+      - run: task prefabreader:build
+      - run: task prefabreader:test
+
+  # Without this, scripts/ is first executed by a tag push, after `validate` has
+  # already certified the commit, so a typo in a build script is reported as a
+  # failed release rather than as a failed build.
+  release:
+    name: release scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Between them these read every piece of shell in the build machinery. The
+      # one exception is the composite action's own run block, which actionlint
+      # does not hand to shellcheck -- which is why that action wraps a script.
+      # Ahead of the toolchain, which is minutes of apt.
+      - run: task tools:actionlint
+      - run: task lint:shell
+      - run: task lint:taskfile
+      - run: task lint:workflows
+      - run: task lint:container
+
+      - uses: ./.github/actions/setup-llvm
+
+      - name: Install static link dependencies
+        run: sudo apt-get install -y zlib1g-dev libzstd-dev libffi-dev
+
+      # Built and verified for real rather than only parsed, through the same two
+      # scripts the release workflow calls. VERSION is the commit rather than a
+      # tag so the -X main.version stamp is compared against something the binary
+      # cannot report by default.
+      - name: Build and verify the Linux release artifact
+        env:
+          VERSION: ${{ github.sha }}
+          CORPUS_MANIFEST: corpus-linux.txt
+        run: |
+          scripts/build-release-linux.sh ic11c
+          scripts/verify-release-linux.sh ic11c
+
+      # What the other two platforms are compared against.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-corpus-linux
+          path: corpus-linux.txt
+          if-no-files-found: error
+
+  # The Windows cross toolchain resolves and links a target-side LLVM that
+  # nothing else in the repository touches, and until this job existed a tag
+  # push was the first thing to run it.
+  release-windows:
+    name: release artifact (windows)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Read the LLVM major
+        run: scripts/read-llvm-major.sh
+
+      # No --pull and no cache refresh: the base is pinned by digest and every
+      # MSYS2 archive by scripts/msys2-ucrt64.lock, so this builds the same
+      # toolchain the tag will. A lock the mirror has dropped fails here.
+      - name: Build and verify
+        env:
+          VERSION: ${{ github.sha }}
+        run: >-
+          docker build --target artifact-windows
+          --build-arg LLVM_VERSION="${LLVM_VERSION}"
+          --build-arg VERSION="${VERSION}"
+          --output type=local,dest=dist .
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-dist-windows
+          path: dist/ic11c_Windows_x86_64.zip
+          if-no-files-found: error
+
+  # The functional half of the Windows check, which the cross-build container
+  # cannot do: nothing there executes a PE.
+  release-windows-run:
+    name: release artifact runs (windows)
+    needs: [release-windows]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # A declared permissions block sets every unlisted scope to none, and
+    # download-artifact reaches this run's artifacts through the Actions API.
+    permissions:
+      actions: read
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ci-dist-windows
+
+      # Expand-Archive rather than unzip, which Git Bash does not ship.
+      - name: Unpack the artifact
+        shell: pwsh
+        run: Expand-Archive -Path ic11c_Windows_x86_64.zip -DestinationPath unpacked
+
+      # Invoked through bash rather than directly, because a Windows checkout
+      # carries no exec bit for the script to be run by.
+      - name: Compile the corpus
+        env:
+          VERSION: ${{ github.sha }}
+          CORPUS_MANIFEST: corpus-windows.txt
+        run: bash scripts/verify-release-compiles.sh unpacked/ic11c.exe
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-corpus-windows
+          path: corpus-windows.txt
+          if-no-files-found: error
+
+  release-macos:
+    name: release artifact (macos)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # The unversioned formula, for the reason scripts/build-release-macos.sh
+      # gives. That script asserts the major it got, so a Homebrew that has moved
+      # on fails in this job rather than at the tag.
+      - name: Install LLVM
+        run: brew install llvm zstd
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build and verify the macOS release artifact
+        env:
+          VERSION: ${{ github.sha }}
+          CORPUS_MANIFEST: corpus-macos.txt
+        run: |
+          scripts/build-release-macos.sh ic11c
+          scripts/verify-release-macos.sh ic11c
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-corpus-macos
+          path: corpus-macos.txt
+          if-no-files-found: error
+
+  # Three separately linked artifacts, one corpus, one answer -- the four release
+  # jobs exist because `go test` runs on Linux and nowhere else, and this reaches
+  # what only a second platform can change. The comparison lives in scripts/, so
+  # this and the release workflow's copy cannot drift into two gates.
+  platforms-agree:
+    name: the platforms compile the corpus alike
+    needs: [release, release-windows-run, release-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ci-corpus-*
+          merge-multiple: true
+          path: corpora
+
+      - name: Compare
+        run: >-
+          scripts/compare-corpora.sh
+          corpora/corpus-linux.txt corpora/corpus-windows.txt corpora/corpus-macos.txt

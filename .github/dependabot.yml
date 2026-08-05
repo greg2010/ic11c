@@ -1,11 +1,34 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
-# https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
-
 version: 2
 updates:
-  - package-ecosystem: "gomod" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # The LLVM binding is pinned by a build tag that must agree with the
+    # installed libLLVM. Bumping it is a migration, not a version bump.
+    ignore:
+      - dependency-name: "tinygo.org/x/go-llvm"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # The Dockerfile's base images. A digest pin is the whole reason this entry is
+  # needed: it is also what stops the pin ever moving on its own. Reaches FROM
+  # lines only, so the DepotDownloader and ilspycmd versions the same file pins
+  # as ARG defaults are outside it, as are the images Taskfile.yml holds in vars.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # The prefab reader and its test project. Both are matched rather than named,
+  # so a third project added beside them is watched by existing here rather than
+  # by someone remembering to add a line.
+  - package-ecosystem: "nuget"
+    directories:
+      - "/tools/prefabreader"
+      - "/tools/prefabreader/**"
     schedule:
       interval: "weekly"

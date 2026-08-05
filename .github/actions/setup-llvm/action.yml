@@ -1,0 +1,11 @@
+name: Setup LLVM
+description: Install libLLVM development headers and a matching clang driver for the major .llvm-version names
+
+runs:
+  using: composite
+  steps:
+    # A wrapper and nothing else: actionlint hands a workflow's run blocks to
+    # shellcheck but not a composite action's, so shell written here is shell no
+    # linter reads.
+    - shell: bash
+      run: "${GITHUB_WORKSPACE}/scripts/setup-llvm.sh"

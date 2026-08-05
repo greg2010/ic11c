@@ -1,25 +1,40 @@
+version: "2"
 run:
-  # vendor means that when the golangci-lint tool runs it doesn't pull down the dependency repos
-  # with the flag it assumes the vendor folder is in a good state and doesn't check dependencies
-  # Alternative: set to readonly if you want the linter to fail if your go.mod file has an out of date dependency
-  modules-download-mode: vendor
+    modules-download-mode: mod
+    # Spelled out because golangci-lint interpolates nothing. `task lint` passes
+    # the same tags on the command line; scripts/check-llvm-version.sh holds
+    # this to .llvm-version so a bare `golangci-lint run` cannot lint a
+    # different major's build than the tests do.
+    build-tags: [llvm22]
 linters:
-  disable-all: true
-  enable:
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - typecheck
-    - unused
-    - revive
-    - forcetypeassert
-    - exhaustive
-    - gofmt
-    - whitespace
-issues:
-  exclude-rules:
-    - linters:
+    default: none
+    enable:
         - errcheck
-      text: ".*logger.Sync.*"
+        - exhaustive
+        - forcetypeassert
+        - govet
+        - ineffassign
+        - revive
+        - staticcheck
+        - unused
+        - whitespace
+        - exptostd
+        - usestdlibvars
+    settings:
+        exhaustive:
+            default-signifies-exhaustive: false
+    # No path exclusions. Generated code is recognised by its header, and a path
+    # pattern here is an unanchored regex over the whole path, so one naming a
+    # directory silently excuses every file whose name contains it.
+    exclusions:
+        generated: lax
+        presets:
+            - comments
+            - common-false-positives
+            - legacy
+            - std-error-handling
+formatters:
+    enable:
+        - gofmt
+    exclusions:
+        generated: lax

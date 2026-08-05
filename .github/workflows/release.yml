@@ -1,32 +1,280 @@
-name: goreleaser
+name: release
 
 on:
   push:
     tags:
       - 'v*'
 
+# A declared permissions block sets every unlisted scope to none. actions: read
+# is what the CI gate's `gh run list` needs; writing contents is the release
+# job's alone and is granted there.
 permissions:
-  contents: write
-  # packages: write
-  # issues: write
+  actions: read
+  contents: read
 
+# One release at a time, and never cancelled: a half-published release is worse
+# than a queued one.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# cgo cannot cross-compile on its own, so Linux and macOS each build on a native
+# runner; Windows is cross-linked in the release container against MSYS2's
+# mingw-ABI LLVM, so only running that artifact needs a Windows runner. Nothing
+# publishes until all three have compiled the corpus and agree on the result.
 jobs:
-  goreleaser:
+  # Nothing builds until the tagged commit is proven to be on master and to
+  # have passed CI, so a tag pushed onto a broken or unmerged commit cannot
+  # publish a release.
+  validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
-      - run: git fetch --force --tags
-      - uses: actions/setup-go@v4
-        with:
-          go-version: 1.20.4
-      # More assembly might be required: Docker logins, GPG, etc. It all depends
-      # on your needs.
-      - uses: goreleaser/goreleaser-action@v4
-        with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
+
+      # The checkout above is unshallow, which is what lets the script reach the
+      # merge base rather than only the tagged commit.
+      - name: Verify the tag is on master
+        run: scripts/verify-tag-on-master.sh
+
+      - name: Verify CI passed for this commit
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/verify-ci-passed.sh
+
+  linux:
+    needs: [validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: ./.github/actions/setup-llvm
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The static link pulls these in directly rather than through libLLVM's
+      # shared object, so their archives have to be present.
+      - name: Install static link dependencies
+        run: sudo apt-get install -y zlib1g-dev libzstd-dev libffi-dev
+
+      # Natively rather than through the release container, since LLVM is already
+      # installed above. Both paths call the same script, so the flags cannot
+      # drift between CI and a local `task release:linux`.
+      - name: Build
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: scripts/build-release-linux.sh ic11c
+
+      - name: Verify the executable is self-contained and compiles
+        env:
+          VERSION: ${{ github.ref_name }}
+          CORPUS_MANIFEST: corpus-linux.txt
+        run: scripts/verify-release-linux.sh ic11c
+
+      - name: Package
+        run: tar czf "ic11c_Linux_x86_64.tar.gz" ic11c README.md
+
+      # if-no-files-found defaults to warn, so without it an upload whose path
+      # matched nothing succeeds and the release publishes without this platform.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-linux
+          path: ic11c_Linux_x86_64.tar.gz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: corpus-linux
+          path: corpus-linux.txt
+          if-no-files-found: error
+
+  macos:
+    needs: [validate]
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # The unversioned formula, for the reason scripts/build-release-macos.sh
+      # gives. zstd is a Homebrew dependency of LLVM rather than an OS library,
+      # so the static link needs its archive too.
+      - name: Install LLVM
+        run: brew install llvm zstd
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: scripts/build-release-macos.sh ic11c
+
+      - name: Verify the executable is self-contained and compiles
+        env:
+          VERSION: ${{ github.ref_name }}
+          CORPUS_MANIFEST: corpus-macos.txt
+        run: scripts/verify-release-macos.sh ic11c
+
+      # Fixed rather than derived from the runner, so a published download URL
+      # cannot change under a `macos-latest` that moved architecture. What pins
+      # it is the Mach-O assertion in the step above.
+      - name: Package
+        run: tar czf "ic11c_Darwin_arm64.tar.gz" ic11c README.md
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-macos
+          path: ic11c_Darwin_arm64.tar.gz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: corpus-macos
+          path: corpus-macos.txt
+          if-no-files-found: error
+
+  # The one job that goes through the release container: a native Windows runner
+  # would need its own MSYS2 install and its own copy of the link flags. CI
+  # builds this same stage on every change, so a broken toolchain is known before
+  # the tag rather than after it.
+  windows:
+    needs: [validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Read the LLVM major
+        run: scripts/read-llvm-major.sh
+
+      # The self-containment check runs inside the container, as the last step of
+      # the build stage, because the objdump that reads a PE import table is part
+      # of the cross toolchain rather than the runner. No --pull: the base is
+      # pinned by digest and every MSYS2 archive by scripts/msys2-ucrt64.lock.
+      - name: Build and verify
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: >-
+          docker build --target artifact-windows
+          --build-arg LLVM_VERSION="${LLVM_VERSION}"
+          --build-arg VERSION="${VERSION}"
+          --output type=local,dest=dist .
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-windows
+          path: dist/ic11c_Windows_x86_64.zip
+          if-no-files-found: error
+
+  # The functional half of the Windows check, which the cross-build container
+  # cannot do: nothing there executes a PE. It runs against the packaged zip, so
+  # what it exercises is what is published, and keeping it apart from the
+  # import-table half leaves the build itself needing no Windows runner.
+  windows-run:
+    needs: [windows]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # Already granted by the workflow default, but spelled out so that every job
+    # downloading an artifact says which scopes it is for rather than half of
+    # them reading as a narrowing and half as an inheritance.
+    permissions:
+      actions: read
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist-windows
+
+      # Expand-Archive rather than unzip, which Git Bash does not ship.
+      - name: Unpack the artifact
+        shell: pwsh
+        run: Expand-Archive -Path ic11c_Windows_x86_64.zip -DestinationPath unpacked
+
+      # Invoked through bash rather than directly, because a Windows checkout
+      # carries no exec bit for the script to be run by.
+      - name: Verify the executable compiles
+        env:
+          VERSION: ${{ github.ref_name }}
+          CORPUS_MANIFEST: corpus-windows.txt
+        run: bash scripts/verify-release-compiles.sh unpacked/ic11c.exe
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: corpus-windows
+          path: corpus-windows.txt
+          if-no-files-found: error
+
+  # Three separately linked artifacts, one corpus, one answer. The comparison
+  # lives in scripts/, so this and the CI workflow's copy cannot drift into two
+  # gates; that script says what a difference here means.
+  agree:
+    name: the platforms compile the corpus alike
+    needs: [linux, macos, windows-run]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: corpus-*
+          merge-multiple: true
+          path: corpora
+
+      - name: Compare
+        run: >-
+          scripts/compare-corpora.sh
+          corpora/corpus-linux.txt corpora/corpus-windows.txt corpora/corpus-macos.txt
+
+  release:
+    needs: [linux, macos, windows, windows-run, agree]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The one job that publishes. A job-level block replaces the workflow default
+    # outright rather than adding to it.
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      # if-no-files-found: error catches an upload that matched nothing; this
+      # catches a download that dropped one. Neither is visible in the publish
+      # below: `gh release create dist/*` is as happy with two platforms as three.
+      - name: Verify every platform arrived
+        run: scripts/verify-release-assets.sh
+
+      - name: Verify every archive carries both members
+        run: scripts/verify-release-archives.sh
+
+      - name: Checksums
+        run: scripts/release-checksums.sh
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # --verify-tag so that a ref that does not exist on the remote fails
+        # here rather than being created as a tag by the publish itself.
+        run: >-
+          gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag
+          --generate-notes --repo "${GITHUB_REPOSITORY}"
