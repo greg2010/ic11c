@@ -15,29 +15,18 @@ const PreludeFileName = "ic10_prelude.h"
 // compilation database.
 const CompileFlagsFileName = "compile_flags.txt"
 
-// PreludeDirName is the directory, relative to a directory holding sources,
-// that Prelude is written into. It is a dot directory because what lands there
-// is generated and stamped with the game version it was extracted from, so it
-// is neither read nor edited beside the sources.
-//
-// CompileFlags does not go there: clangd finds a flags file by walking up from
-// the source it opens, so one at the top of a source tree configures every
-// directory under it.
+// PreludeDirName is the directory, relative to a directory holding
+// sources, that Prelude is written into: a dot directory because what
+// lands there is generated and version-stamped. CompileFlags does not go
+// there — clangd walks up from the opened source, so one at the tree's top
+// configures every directory under it.
 const PreludeDirName = ".ic11c"
 
-// The prefix each operand family spells a name with where an earlier family has
-// already taken the bare spelling.
-//
-// C admits one enumerator per name in a scope, and the families share names, so
-// Prelude gives each shared name to the first family that carries it and
-// prefixes it in every later one. A position resolves the prefixed spelling only
-// where the family actually gave the bare name up: nothing else is declared, and
-// a program naming one would not be C.
-//
-// The families claim names in the order these are written. cmd/isagen writes the
-// header from its own copy of both, since it cannot depend on the tables it
-// generates, and [TestPreludeEnumeratorsResolveAsMicroCDoes] holds the two
-// together.
+// The prefix each operand family spells a name with, where an earlier
+// family already took the bare spelling. C admits one enumerator per name
+// per scope, so Prelude gives the bare name to the first family that
+// carries it and prefixes every later one; see
+// [TestPreludeEnumeratorsResolveAsMicroCDoes].
 const (
 	LogicTypePrefix   = "LogicType_"
 	SlotTypePrefix    = "SlotType_"
@@ -45,41 +34,35 @@ const (
 	ReagentModePrefix = "ReagentMode_"
 )
 
-// Prelude is a C header declaring everything a MicroC program may name: the
-// device pins, the four operand enums, the machine constants and the
-// intrinsics. It lets a C editor parse and complete a MicroC source file.
+// Prelude is a C header declaring everything a MicroC program may name:
+// device pins, the four operand enums, machine constants, and intrinsics —
+// so a C editor can parse and complete a MicroC source file. Generated from
+// the same ISA data as the machine tables, so it cannot describe a
+// different machine from the compiler; what it declares is a strict
+// superset of MicroC.
 //
-// It is generated from the same ISA data as the machine tables, so it cannot
-// describe a different machine from the compiler. What it describes is a
-// superset of MicroC: a C toolchain accepts every program MicroC accepts, and
-// some it does not.
-//
-//go:embed ic10_prelude.h
+//go:embed generated/ic10_prelude.h
 var Prelude string
 
 // CompileFlags is the argument file that pairs with Prelude, one argument per
 // line, in the form clangd and `clang @file` read.
 //
-//go:embed compile_flags.txt
+//go:embed generated/compile_flags.txt
 var CompileFlags string
 
 // CompileFlagsIncluding returns CompileFlags with its -include argument
-// replaced by header, which names the prelude relative to the directory the
-// result is written into. Every other argument is preserved verbatim, so the
-// flags an editor gets are the ones the conformance gate runs.
-//
-// The separator is a slash whatever the host, since the argument is read by a C
-// driver rather than by the operating system.
+// replaced by header, every other argument preserved verbatim. The
+// separator is always a slash, since the argument is read by a C driver
+// rather than by the operating system.
 func CompileFlagsIncluding(header string) (string, error) {
 	return compileFlagsIncluding(CompileFlags, header)
 }
 
-// compileFlagsIncluding substitutes the header path in the argument file flags.
-//
-// The generator writes the bare file name last and nothing else after it, so
-// replacing that suffix is enough. A flags file in any other shape is reported
-// rather than appended to, which would otherwise leave two -include arguments
-// and no way to tell which one the driver used.
+// compileFlagsIncluding substitutes the header path in the argument file
+// flags. The generator writes the bare file name last and nothing else
+// after it, so replacing that suffix is enough; any other shape is
+// reported rather than appended to, which would otherwise leave two
+// -include arguments with no way to tell which the driver used.
 func compileFlagsIncluding(flags, header string) (string, error) {
 	base, ends := strings.CutSuffix(flags, PreludeFileName+"\n")
 	if !ends {

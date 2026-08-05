@@ -9,27 +9,23 @@ import (
 	"github.com/greg2010/ic11c/internal/sema"
 )
 
-// prototypePattern matches one function declaration in the generated header.
-// Nothing else in the header declares a function, so what this finds is the
-// intrinsic list and only it.
-//
-// The result type is matched lazily because it can be more than one word: the
-// name is the last identifier before the parameter list, and everything left of
-// it is the type.
+// prototypePattern matches one function declaration in the generated
+// header. Nothing else in the header declares a function, so this finds
+// the intrinsic list and only it. The result type is matched lazily since
+// it can be more than one word — the name is the last identifier before
+// the parameter list.
 var prototypePattern = regexp.MustCompile(`(?m)^(.+?) +([A-Za-z_][A-Za-z0-9_]*)\(([^)]*)\);$`)
 
 // parameterName matches the identifier a declaration gives its parameter, which
 // is what has to come off to leave the type.
 var parameterName = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*$`)
 
-// TestPreludeDeclaresEveryIntrinsic checks the checked-in header against the
-// table analysis resolves an intrinsic call through. cmd/isagen writes the
-// prototypes as literal text and cannot import sema, so nothing but this ties
-// the two lists together.
-//
-// It compares whole signatures rather than names. Two things it still cannot
-// see: a slot index from an ordinary int operand, which C spells the same way,
-// and the three rules the header itself notes no prototype can carry.
+// TestPreludeDeclaresEveryIntrinsic checks the checked-in header against
+// the table sema resolves an intrinsic call through — nothing else ties
+// the two together, since tools/isagen writes the prototypes as literal
+// text and cannot import sema. Compares whole signatures, not just names;
+// it cannot see a slot index passed as an ordinary int, which C spells the
+// same way.
 func TestPreludeDeclaresEveryIntrinsic(t *testing.T) {
 	declared := declaredPrototypes(t)
 
@@ -115,11 +111,10 @@ func cDeclaration(result, name string, params []string) string {
 	return result + " " + name + "(" + strings.Join(params, ", ") + ")"
 }
 
-// cOperandType is the type the header declares a parameter of the given kind
-// with, and empty for a kind C cannot spell.
-//
-// A slot index shares int with an ordinary value: what separates them is that
-// the first must be a constant expression, which is not a C type.
+// cOperandType is the type the header declares a parameter of the given
+// kind with, empty for a kind C cannot spell. A slot index shares "long
+// long" with an ordinary value — what separates them, that it must be a
+// constant expression, is not a C type.
 func cOperandType(kind sema.OperandKind) string {
 	switch kind {
 	case sema.OperandValue, sema.OperandSlot:

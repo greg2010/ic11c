@@ -1,6 +1,8 @@
 package ic10
 
 import (
+	"math"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -84,12 +86,31 @@ func TestUnemittableKeysAreRealOpcodes(t *testing.T) {
 	}
 }
 
-// TestUnemittableCount is a tripwire: growing or shrinking this set is a
-// deliberate decision about what the backend may emit, not a side effect.
-func TestUnemittableCount(t *testing.T) {
-	const want = 24
-	if got := len(unemittableOps); got != want {
-		t.Errorf("unemittable instructions = %d, want %d", got, want)
+// TestUnemittableSet names the whole set, since growing or shrinking it is
+// a deliberate decision about what the backend may emit. Written out
+// rather than counted: [TestUnemittable] and
+// [TestEveryRelativeFormIsUnemittable] already catch a removal, so what is
+// left here is catching an addition, which a count could not name.
+func TestUnemittableSet(t *testing.T) {
+	want := []string{
+		"bapzal", "bnazal", "brapz", "brnaz",
+		"sla",
+		"brap", "brdns", "brdse", "breq", "breqz", "brge", "brgez", "brgt", "brgtz",
+		"brle", "brlez", "brlt", "brltz", "brna", "brnan", "brne", "brnez", "jr",
+		"hcf",
+	}
+	slices.Sort(want)
+
+	// String renders an entry outside the instruction table as its number, so a
+	// key that no longer names anything reports as one rather than being skipped.
+	got := make([]string, 0, len(unemittableOps))
+	for op := range unemittableOps {
+		got = append(got, op.String())
+	}
+	slices.Sort(got)
+
+	if !slices.Equal(got, want) {
+		t.Errorf("the backend may not select %v, and this build refuses %v", want, got)
 	}
 }
 
@@ -146,6 +167,84 @@ func TestFirstLineHazardsAreEmittable(t *testing.T) {
 		}
 		if _, bad := Unemittable(op); bad {
 			t.Errorf("%s is both unemittable and a first line hazard; the placement rule is unreachable", instruction.Mnemonic)
+		}
+	}
+}
+
+// TestUnreadable covers the values an operand literal cannot name, and the
+// nearest values it can — the neighbours are the point: negative zero
+// compares equal to positive zero and differs by one bit, so a classifier
+// keyed on value rather than sign would miss the defect.
+func TestUnreadable(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		want  bool
+	}{
+		{name: "a NaN", value: math.NaN(), want: true},
+		{name: "a NaN with a payload", value: math.Float64frombits(0x7ff8000000000042), want: true},
+		{name: "a negative zero", value: math.Copysign(0, -1), want: true},
+		{name: "a positive zero"},
+		{name: "positive infinity", value: math.Inf(1)},
+		{name: "negative infinity", value: math.Inf(-1)},
+		{name: "the smallest subnormal", value: math.SmallestNonzeroFloat64},
+		{name: "the smallest negative subnormal", value: -math.SmallestNonzeroFloat64},
+		{name: "the largest double", value: math.MaxFloat64},
+		{name: "the most negative double", value: -math.MaxFloat64},
+		{name: "minus one", value: -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			remedy, got := Unreadable(tt.value)
+			if got != tt.want {
+				t.Fatalf("Unreadable(%016x) = %v, want %v", math.Float64bits(tt.value), got, tt.want)
+			}
+			if !got {
+				if remedy != (UnreadableValue{}) {
+					t.Errorf("Unreadable(%016x) returned %+v for a value the parser reads back", math.Float64bits(tt.value), remedy)
+				}
+				return
+			}
+			if remedy.Reason == "" {
+				t.Errorf("Unreadable(%016x) gives no reason", math.Float64bits(tt.value))
+			}
+		})
+	}
+}
+
+// TestEveryRemedyIsOneTheBackendCanBuild holds the table's own arithmetic
+// to the rules everything else in the backend is held to. Worth stating:
+// nothing about the table's shape stops a remedy from naming an operand
+// the parser also cannot read, which would be a rule that cannot be
+// applied, so that is asserted too.
+func TestEveryRemedyIsOneTheBackendCanBuild(t *testing.T) {
+	for _, value := range []float64{math.NaN(), math.Copysign(0, -1)} {
+		remedy, ok := Unreadable(value)
+		if !ok {
+			t.Fatalf("Unreadable(%016x) found nothing to do", math.Float64bits(value))
+		}
+		instruction, known := remedy.Op.Instruction()
+		if !known {
+			t.Errorf("the remedy for %016x names %v, which is outside the instruction table", math.Float64bits(value), remedy.Op)
+			continue
+		}
+		if reason, bad := Unemittable(remedy.Op); bad {
+			t.Errorf("the remedy for %016x is %s, which the backend may not select: %s",
+				math.Float64bits(value), instruction.Mnemonic, reason)
+		}
+		if reason, hazard := FirstLineHazard(remedy.Op); hazard {
+			t.Errorf("the remedy for %016x is %s, which is wrong on line 0 and may land there: %s",
+				math.Float64bits(value), instruction.Mnemonic, reason)
+		}
+		if len(instruction.Operands) != 3 {
+			t.Errorf("the remedy for %016x is %s, which takes %d operands; the rewrite writes a destination and two sources",
+				math.Float64bits(value), instruction.Mnemonic, len(instruction.Operands))
+		}
+		for i, operand := range []float64{remedy.Left, remedy.Right} {
+			if _, unreadable := Unreadable(operand); unreadable {
+				t.Errorf("the remedy for %016x names at source %d a value the parser cannot read either (%016x)",
+					math.Float64bits(value), i, math.Float64bits(operand))
+			}
 		}
 	}
 }

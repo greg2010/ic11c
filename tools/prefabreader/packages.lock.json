@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net9.0": {
+      "AssetsTools.NET": {
+        "type": "Direct",
+        "requested": "[3.0.4, )",
+        "resolved": "3.0.4",
+        "contentHash": "NqYy5UIucwKwdkpamFTi8lr53hD+V8qQmbHzztQj1v4Pq1G4TjNlpkUWOhktTLBqBm4aPRaAkpFgB+3TDEuomw=="
+      },
+      "AssetsTools.NET.MonoCecil": {
+        "type": "Direct",
+        "requested": "[3.0.4, )",
+        "resolved": "3.0.4",
+        "contentHash": "cWchJC+FR5h9ULKYFYPZL5zVBXRzKLBMQTNspQGH9pq4lXtwFTWd1QtOkX5HsHirGrmm651h/TfwrBZ2ru9PvA==",
+        "dependencies": {
+          "AssetsTools.NET": "3.0.0",
+          "Mono.Cecil": "0.11.3"
+        }
+      },
+      "Mono.Cecil": {
+        "type": "Direct",
+        "requested": "[0.11.3, )",
+        "resolved": "0.11.3",
+        "contentHash": "DNYE+io5XfEE8+E+5padThTPHJARJHbz1mhbhMPNrrWGKVKKqj/KEeLvbawAmbIcT73NuxLV7itHZaYCZcVWGg=="
+      }
+    }
+  }
+}

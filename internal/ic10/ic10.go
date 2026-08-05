@@ -1,13 +1,7 @@
-// Package ic10 describes the Stationeers IC10 target: its register file, its
-// instruction set, and the operand enums instructions are parameterised by.
-//
-// The tables in tables.gen.go are extracted from the game assembly by
-// cmd/isagen and are authoritative over any published documentation. The types
-// here are hand written and are what the tables populate. Behavioural defects
-// that no extraction can express live in quirks.go.
-//
-// Nothing in this package is safe to mutate. The tables are package level
-// slices for cheap indexed access, not a defensive copy per caller.
+// Package ic10 describes the Stationeers IC10 target: register file,
+// instruction set, and operand enums, sourced from internal/isa plus machine
+// facts the extraction cannot state (slot width, sp/ra). Tables are
+// package-level slices — do not mutate them.
 package ic10
 
 import (
@@ -15,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/greg2010/ic11c/internal/isa"
 )
 
 // Opcode identifies an instruction. Its value is the ScriptCommand ordinal in
@@ -40,10 +36,9 @@ func (op Opcode) String() string {
 
 // Instruction is one mnemonic the chip's assembler accepts.
 //
-// Deprecated instructions still assemble and run; the flag mirrors the game's
-// own list and exists so the compiler can prefer the current spelling.
-// Unemittable reports the stronger condition, that the backend must never
-// select the instruction at all.
+// Deprecated instructions still assemble and run; the flag exists so the
+// compiler can prefer the current spelling. See [Unemittable] for the
+// stronger condition that the backend must never select an instruction.
 type Instruction struct {
 	Mnemonic   string
 	Opcode     Opcode
@@ -55,6 +50,35 @@ type Instruction struct {
 	// operandless forms. Its length is the arity the chip's assembler
 	// enforces, which is one of the few things it does check at compile time.
 	Operands []Operand
+	// Implicit lists the registers the instruction reaches without an operand
+	// naming them, ordered by register. Nil except for the stack forms and
+	// the linking jumps.
+	Implicit []ImplicitUse
+}
+
+// ImplicitUse is one register an instruction reaches without an operand
+// naming it, and what it does to it. jal's DirectionWrite always replaces
+// ra; every other linking form assigns ra only where it branches, so it
+// carries DirectionReadWrite instead: the prior value survives otherwise.
+type ImplicitUse struct {
+	Register  Register
+	Direction Direction
+}
+
+// WritesImplicitly reports whether the instruction assigns reg without any
+// operand naming it, which covers both replacing the register and folding a new
+// value into what it held.
+func (i Instruction) WritesImplicitly(reg Register) bool {
+	return slices.ContainsFunc(i.Implicit, func(use ImplicitUse) bool {
+		return use.Register == reg && (use.Direction == DirectionWrite || use.Direction == DirectionReadWrite)
+	})
+}
+
+// LinksReturn reports whether op leaves a return address in ra, marking it
+// as a call: what is live across it must be saved. See [Instruction.Implicit]
+// for the write/read-write split this collapses.
+func LinksReturn(op Opcode) bool {
+	return linkingOps[op]
 }
 
 // Operand describes one positional operand.
@@ -69,6 +93,10 @@ type Operand struct {
 	// names. It is extracted from the game's own operation classes rather
 	// than inferred from the operand's position.
 	Direction Direction
+	// Conversion is what the chip does to the operand's value on the way into
+	// the instruction, extracted per operand: one operand of an instruction
+	// may convert while another does not, or convert differently.
+	Conversion Conversion
 }
 
 // Accepts reports whether the operand admits a value of the given kind.
@@ -77,53 +105,75 @@ func (o Operand) Accepts(kind OperandKind) bool {
 }
 
 // Direction is what an instruction does to the register an operand names.
-//
-// The zero value is DirectionUnknown so that an operand built anywhere other
-// than the generated table claims nothing. Register allocation reading a
-// direction wrongly produces working-looking code that has lost a value, with
-// no diagnostic anywhere; refusing an operand that says nothing is the only
-// failure mode that reports itself.
-type Direction uint8
+// Zero value is DirectionUnknown, so an operand built outside the generated
+// table claims nothing. Treating an unknown direction as read or write loses
+// a value silently — refuse it instead.
+type Direction = isa.Direction
 
 const (
 	// DirectionUnknown is an operand whose direction the extraction could not
 	// read out of the game source. It is never a licence to assume either
 	// answer.
-	DirectionUnknown Direction = iota
+	DirectionUnknown = isa.DirectionUnknown
 	// DirectionRead is an operand the instruction only consumes.
-	DirectionRead
+	DirectionRead = isa.DirectionRead
 	// DirectionWrite is an operand whose register the instruction assigns
 	// without reading what was there.
-	DirectionWrite
+	DirectionWrite = isa.DirectionWrite
 	// DirectionReadWrite is an operand whose register the instruction reads and
 	// then assigns, so the value live in it before the instruction is one of the
 	// instruction's inputs.
-	DirectionReadWrite
+	DirectionReadWrite = isa.DirectionReadWrite
 )
 
-var directionNames = [...]string{
-	DirectionUnknown:   "unknown",
-	DirectionRead:      "read",
-	DirectionWrite:     "write",
-	DirectionReadWrite: "readwrite",
-}
-
-func (d Direction) String() string {
-	if int(d) >= len(directionNames) {
-		return "Direction(" + strconv.FormatUint(uint64(d), 10) + ")"
-	}
-	return directionNames[d]
-}
-
-// WriteIndex reports the operand position the instruction assigns a register
-// through, or -1 when it assigns none.
+// Conversion is what the chip does to an operand's value on the way into
+// the instruction, per operand rather than per instruction: the bound
+// differs by conversion, so one operand can stop the chip while another
+// operand of the same instruction silently narrows.
 //
-// It fails rather than answering where one index cannot carry the whole truth:
-// an operand of unknown direction, more than one written operand, or an operand
-// the instruction reads before assigning. A caller treats the index as a
-// definition with no accompanying use, so answering with a read-write position
-// would let allocation believe a live value is dead. Supporting one means
-// reading Operands directly and modelling the use as well.
+// Zero value is ConversionUnknown, so an operand built outside the
+// generated table claims nothing; treating it as unconverted skips the
+// bound that would have refused the operand.
+type Conversion = isa.Conversion
+
+const (
+	// ConversionUnknown is an operand whose conversion the extraction could
+	// not read out of the game source. It is never a licence to assume the
+	// operand is unconverted.
+	ConversionUnknown = isa.ConversionUnknown
+	// ConversionNone is an operand no conversion below governs — not the same
+	// as no reduction: poke's address, ls's slotIndex, lb's deviceHash, j's
+	// target, and the id operand of sd, ld and getd all reach the instruction
+	// already rounded or truncated by their own variable class rather than by
+	// a conversion here.
+	ConversionNone = isa.ConversionNone
+	// ConversionInt is an operand read through GetVariableInt: it raises
+	// ShiftUnderflow below -2^31 and ShiftOverflow above 2^31-1, otherwise
+	// casts. Both bounds are ordered comparisons, false for NaN, so a NaN
+	// passes through and casts to -2^31 like any other in-range value.
+	ConversionInt = isa.ConversionInt
+	// ConversionNarrowedInt is an operand the operation casts to int
+	// directly, with no range check ahead of it, so unlike ConversionInt it
+	// never stops the chip. Mono's cvttsd2si truncates toward zero and
+	// answers -2^31 for a NaN, either infinity, or an out-of-range magnitude
+	// alike.
+	ConversionNarrowedInt = isa.ConversionNarrowedInt
+	// ConversionSignedLong is an operand read through GetVariableLong, sign
+	// kept: it stops the chip outside ±2^63, otherwise reduces modulo 2^53
+	// silently. The bound is the same ordered comparisons as ConversionInt,
+	// so NaN falls through and reduces to -2^63 rather than stopping the
+	// chip.
+	ConversionSignedLong = isa.ConversionSignedLong
+	// ConversionUnsignedLong is the same reduction with the residue masked to
+	// 54 bits rather than signed.
+	ConversionUnsignedLong = isa.ConversionUnsignedLong
+)
+
+// WriteIndex reports the operand position the instruction assigns through,
+// or -1 when no such operand exists — including when the write is implicit
+// (jal, the al family, every stack form): read [Instruction.Implicit] for
+// those. It errors on an unknown direction, more than one written operand,
+// or a read-write operand, since none of those fit a single index.
 func (i Instruction) WriteIndex() (int, error) {
 	written := -1
 	for position, operand := range i.Operands {
@@ -140,71 +190,46 @@ func (i Instruction) WriteIndex() (int, error) {
 			return 0, fmt.Errorf("%s reads and writes operand %d, which one write index cannot express", i.Mnemonic, position)
 		case DirectionUnknown:
 		}
-		// Undetermined and anything outside the four both mean the table says
-		// nothing usable, and refusing is the only answer that reports itself.
+		// DirectionUnknown and anything outside the four cases mean the table
+		// says nothing usable; refuse rather than guess.
 		return 0, fmt.Errorf("%s operand %d has direction %s", i.Mnemonic, position, operand.Direction)
 	}
 	return written, nil
 }
 
 // OperandKind is a class of value an operand position accepts.
-type OperandKind uint8
+type OperandKind = isa.OperandKind
 
 // The operand kinds, one per token the game's help text is built from.
 const (
 	// OperandRegister is r0 through r15, sp, ra, or an indirect rr form.
-	OperandRegister OperandKind = iota
+	OperandRegister = isa.OperandRegister
 	// OperandNumber is any literal, named constant, or defined name.
-	OperandNumber
+	OperandNumber = isa.OperandNumber
 	// OperandInteger is a jump target: a line number, label, or defined name.
-	OperandInteger
+	OperandInteger = isa.OperandInteger
 	// OperandDevice is db or d0 through d5, optionally with a network
 	// connection suffix, or an indirect dr form.
-	OperandDevice
+	OperandDevice = isa.OperandDevice
 	// OperandRefID is a register or literal holding a device ReferenceId.
-	OperandRefID
+	OperandRefID = isa.OperandRefID
 	// OperandLogicType is a LogicTypes member, by name or by value.
-	OperandLogicType
+	OperandLogicType = isa.OperandLogicType
 	// OperandLogicSlotType is a LogicSlotTypes member, by name or by value.
-	OperandLogicSlotType
+	OperandLogicSlotType = isa.OperandLogicSlotType
 	// OperandBatchMode is a BatchModes member, by name or by value.
-	OperandBatchMode
+	OperandBatchMode = isa.OperandBatchMode
 	// OperandReagentMode is a ReagentModes member, by name or by value.
-	OperandReagentMode
+	OperandReagentMode = isa.OperandReagentMode
 	// OperandDeviceHash is a prefab hash selecting a batch of devices.
-	OperandDeviceHash
+	OperandDeviceHash = isa.OperandDeviceHash
 	// OperandNameHash is a name hash narrowing a device batch.
-	OperandNameHash
+	OperandNameHash = isa.OperandNameHash
 	// OperandSlotIndex is a slot number on a device.
-	OperandSlotIndex
+	OperandSlotIndex = isa.OperandSlotIndex
 	// OperandString is a bare word, used only by the preprocessor forms.
-	OperandString
+	OperandString = isa.OperandString
 )
-
-// operandKindTokens is indexed by OperandKind and holds the spelling the
-// game's help text uses.
-var operandKindTokens = [...]string{
-	OperandRegister:      "r?",
-	OperandNumber:        "num",
-	OperandInteger:       "int",
-	OperandDevice:        "d?",
-	OperandRefID:         "id",
-	OperandLogicType:     "logicType",
-	OperandLogicSlotType: "logicSlotType",
-	OperandBatchMode:     "batchMode",
-	OperandReagentMode:   "reagentMode",
-	OperandDeviceHash:    "deviceHash",
-	OperandNameHash:      "nameHash",
-	OperandSlotIndex:     "slotIndex",
-	OperandString:        "str",
-}
-
-func (k OperandKind) String() string {
-	if int(k) >= len(operandKindTokens) {
-		return "OperandKind(" + strconv.FormatUint(uint64(k), 10) + ")"
-	}
-	return operandKindTokens[k]
-}
 
 // LogicType is a device property selector. Generated code emits the numeric
 // value rather than the name: they resolve identically and the number is far
@@ -214,22 +239,19 @@ type LogicType uint16
 // LogicSlotType is a slot property selector.
 type LogicSlotType uint8
 
-// BatchMode is an aggregation mode for the batch load forms.
+// BatchMode is an aggregation mode for the batch load forms. Backed by a
+// plain int in the game, so int32 rather than the byte the five defined
+// members would fit — narrowing would silently fold an undefined mode onto
+// Average.
 //
-// The game backs the mode with a plain int, so this is int32 rather than the
-// byte the five defined members would fit in. A mode the game does not define
-// stays undefined; narrowing would fold 256 onto Average and leave the program
-// reading the wrong aggregate with no diagnostic.
-//
-// A batch read that matches no device does not report an error. It returns NaN
-// for Average, zero for Sum and Minimum, and negative infinity for Maximum, so
-// testing the result against zero is wrong; test for NaN.
+// A batch read matching no device reports no error: it returns NaN for
+// Average, zero for Sum and Minimum, and negative infinity for Maximum.
+// Test the result for NaN, not against zero.
 type BatchMode int32
 
-// ReagentMode selects which reagent quantity lr reads.
-//
-// Backed by a plain int in the game, for the reason given on [BatchMode].
-// Narrowing would fold an undefined mode onto Contents.
+// ReagentMode selects which reagent quantity lr reads. Backed by a plain
+// int in the game, for the reason given on [BatchMode]; narrowing would
+// fold an undefined mode onto Contents.
 type ReagentMode int32
 
 // LogicTypeInfo is one LogicTypes entry. Deprecated members still resolve and
@@ -261,12 +283,10 @@ type ReagentModeInfo struct {
 	Deprecated bool
 }
 
-// PrefabInfo is one Prefabs entry: a thing the game ships, described by
-// everything a chip can reach about it.
-//
-// The logic and slot surfaces describe a *completed* device. The game refuses
-// every property of a structure still under construction, so a table that
-// reported that state would say no to everything.
+// PrefabInfo is one entry of the game's prefab roster: a thing the game
+// ships, described by everything a chip can reach about it. The logic and
+// slot surfaces describe a completed device only — the game refuses every
+// property of a structure still under construction.
 type PrefabInfo struct {
 	// Name is the prefab's own name, which the game hashes. Hash is the number
 	// a batch instruction operand carries; the chip's assembler resolves no
@@ -296,150 +316,78 @@ type PrefabInfo struct {
 	ModesUnknown bool
 
 	// logic lists the properties l, s and the batch forms reach, in LogicType
-	// order. A property absent from it is one the device answers nothing for.
-	//
-	// It is unexported so that [PrefabInfo.RefusesRead] and
-	// [PrefabInfo.RefusesWrite] are the only ways to ask about a property. See
-	// [access].
-	logic []logicAccess
+	// order; absence means the device answers nothing. Unexported so
+	// [PrefabInfo.RefusesRead] and [PrefabInfo.RefusesWrite] are the only way
+	// to ask about a property.
+	logic []isa.LogicAccess
 }
 
 // RefusesRead reports whether a completed device of this prefab is known to
-// answer nothing when a program reads logicType, and RefusesWrite whether it is
-// known to accept no write of one.
-//
-// These two are the only questions the table answers about a property, and both
-// are phrased as refusals rather than as permissions on purpose. 3500 of the
-// 13426 extracted entries record that the game settles the direction from live
-// state, and a permission query would have to report every one of those as
-// denied. They refuse nothing here, so a program touching one produces no
-// diagnostic at all.
-//
-// A true answer describes a completed device, which is the only state the table
-// models. It says nothing about a structure still under construction, which
-// refuses everything.
+// answer nothing when a program reads logicType; RefusesWrite is the same
+// for a write. Both are phrased as refusals, not permissions: many
+// properties are settled from live state and refuse nothing here.
 func (p PrefabInfo) RefusesRead(logicType LogicType) bool {
-	return p.accessFor(logicType).refusesRead()
+	return refusesRead(p.accessFor(logicType))
 }
 
 // RefusesWrite is [PrefabInfo.RefusesRead] for the other direction.
 func (p PrefabInfo) RefusesWrite(logicType LogicType) bool {
-	return p.accessFor(logicType).refusesWrite()
+	return refusesWrite(p.accessFor(logicType))
 }
 
-func (p PrefabInfo) accessFor(logicType LogicType) access {
+func (p PrefabInfo) accessFor(logicType LogicType) isa.Access {
 	for _, entry := range p.logic {
-		if entry.logicType == logicType {
-			return entry.allows
+		if LogicType(entry.LogicType) == logicType {
+			return entry.Allows
 		}
 	}
-	return accessNone
+	return isa.AccessNone
 }
 
 // SlotInfo is one slot a prefab declares.
 type SlotInfo struct {
 	// Class is the Slot.Class member naming what the slot accepts, such as
-	// "GasCanister". Half the slot properties are readable purely by virtue of
-	// it. It is the name of what an ls Class read returns as a number.
+	// "GasCanister" — what an ls Class read returns as a number.
 	Class string
 
 	// types lists the slot properties reachable on this slot, in LogicSlotType
 	// order. Unexported for the reason PrefabInfo.logic is.
-	types []slotAccess
+	types []isa.SlotAccess
 }
 
 // RefusesRead and RefusesWrite are [PrefabInfo.RefusesRead] for one slot's own
 // properties, and are phrased as refusals for the same reason.
 func (s SlotInfo) RefusesRead(slotType LogicSlotType) bool {
-	return s.accessFor(slotType).refusesRead()
+	return refusesRead(s.accessFor(slotType))
 }
 
 // RefusesWrite is [SlotInfo.RefusesRead] for the other direction.
 func (s SlotInfo) RefusesWrite(slotType LogicSlotType) bool {
-	return s.accessFor(slotType).refusesWrite()
+	return refusesWrite(s.accessFor(slotType))
 }
 
-func (s SlotInfo) accessFor(slotType LogicSlotType) access {
+func (s SlotInfo) accessFor(slotType LogicSlotType) isa.Access {
 	for _, entry := range s.types {
-		if entry.slotType == slotType {
-			return entry.allows
+		if LogicSlotType(entry.SlotType) == slotType {
+			return entry.Allows
 		}
 	}
-	return accessNone
+	return isa.AccessNone
 }
-
-// logicAccess pairs a device property with the directions the game allows.
-type logicAccess struct {
-	logicType LogicType
-	allows    access
-}
-
-// slotAccess pairs a slot property with the directions the game allows.
-type slotAccess struct {
-	slotType LogicSlotType
-	allows   access
-}
-
-// access is the pair of directions the game allows on a property.
-//
-// The game names no such thing: it answers CanLogicRead and CanLogicWrite
-// separately and calls the pair nothing. This is that pair and no more.
-//
-// It does not leave this package, and neither does any field holding one. A
-// consumer that could hold one could write `a == accessReadWrite`, which reads
-// accessUnknown as a denial and would reject working programs from the very
-// data that exists to stop that. What leaves the package is the four refusal
-// queries, which cannot express that mistake.
-type access uint8
-
-const (
-	// accessNone is a property the device does not answer for. It is what a
-	// lookup returns for a property absent from a prefab's table.
-	accessNone access = iota
-	accessRead
-	accessWrite
-	accessReadWrite
-	// accessUnknown is a property whose direction the game decides from live
-	// state -- what a logic transmitter is currently pointed at, whether a pipe
-	// connection is made -- which no reading of the game's code settles.
-	accessUnknown
-)
 
 // refusesRead reports whether the pair rules out a read, and refusesWrite
-// whether it rules out a write.
-//
-// Both name every case that answers true rather than negating the cases that
-// answer false. accessUnknown falls past them, and so does an access a later
-// extraction introduces before these two learn about it, so a pair nothing
-// decided refuses nothing.
-func (a access) refusesRead() bool { return a == accessNone || a == accessWrite }
+// whether it rules out a write. Both enumerate the true cases rather than
+// negate the false ones, so an access neither of them yet knows about
+// (including [isa.AccessUnknown]) refuses nothing.
+func refusesRead(a isa.Access) bool { return a == isa.AccessNone || a == isa.AccessWrite }
 
-func (a access) refusesWrite() bool { return a == accessNone || a == accessRead }
+func refusesWrite(a isa.Access) bool { return a == isa.AccessNone || a == isa.AccessRead }
 
-func (a access) String() string {
-	switch a {
-	case accessNone:
-		return "none"
-	case accessRead:
-		return "read"
-	case accessWrite:
-		return "write"
-	case accessReadWrite:
-		return "readwrite"
-	case accessUnknown:
-		return "unknown"
-	default:
-		return "access(" + strconv.FormatUint(uint64(a), 10) + ")"
-	}
-}
-
-// Constant is a numeric literal the chip's assembler accepts wherever a number
-// is accepted.
-//
-// Values come from the game and are not recomputed. deg2rad and rad2deg are
-// float precision literals widened to double, so folding them at full double
-// precision diverges from the game, and epsilon is the smallest positive
-// subnormal rather than a comparison tolerance.
+// Constant is a numeric literal the chip's assembler accepts wherever a
+// number is accepted, taken from the game rather than recomputed. deg2rad
+// and rad2deg are float-precision literals widened to double — folding them
+// at full double precision diverges from the game. epsilon is the smallest
+// positive subnormal, not a comparison tolerance.
 type Constant struct {
 	Name  string
 	Value float64
@@ -451,35 +399,29 @@ const (
 	// NumRegisters counts the whole file, r0 through r15 plus sp and ra. It is
 	// the length of ProgrammableChip._Registers.
 	NumRegisters = 18
-	// NumGeneralRegisters counts r0 through r15, and bounds the one range
-	// restriction the machine puts on a register: a register holding a device
-	// ReferenceId resolves within them only.
-	//
-	// Indirect referencing is not bounded by it. An rr form indexes the whole
-	// register array, so an index of 16 or 17 reaches sp or ra, and only one
-	// outside 0 through 17 faults.
+	// NumGeneralRegisters counts r0 through r15: the one range restriction the
+	// machine puts on a register, since a device ReferenceId resolves within
+	// them only. Indirect rr forms are not bounded by it — they index the
+	// whole register array, so index 16 or 17 reaches sp or ra and only an
+	// index outside 0-17 faults.
 	NumGeneralRegisters = 16
-	// RegSP is the stack pointer used by push, pop, and peek. Keeping it
-	// clear of the data region is the register allocator's job, since both
-	// share one 512 slot array.
+	// RegSP is the stack pointer used by push, pop, and peek.
 	RegSP Register = 16
 	// RegRA is where jal writes the return address.
 	RegRA Register = 17
 )
 
-// NumMemorySlots is the length of ProgrammableChip._Stack, the chip's one
-// double array. push, pop, peek, poke, get and put all address it, and so does
-// a get or put through db, so the data region a compiler lays out and the call
-// frames a program pushes share it with no hardware boundary between them.
+// NumMemorySlots is the length of ProgrammableChip._Stack: one double array
+// shared with no boundary between the data region and the call stack.
+// Writing past it via poke/push/put raises StackOverFlow; reading past it
+// via get raises Unknown, since _GET_Operation skips the try/catch that
+// _PUT_Operation wraps WriteMemory in.
 const NumMemorySlots = 512
 
-// NumDevicePins is how many device pins a housing has, d0 through d5, and is
-// the length of CircuitHousing.Devices. The housing itself is reached by db,
-// which is not a pin.
-//
-// d6 through d9 assemble and then index a six element array, faulting once per
-// tick with no error naming the pin, so nothing downstream catches a pin past
-// this.
+// NumDevicePins is how many device pins a housing has, d0 through d5 — the
+// length of CircuitHousing.Devices. db reaches the housing itself, not a
+// pin. d6 through d9 assemble and then fault every tick indexing past the
+// array, with no error naming which pin.
 const NumDevicePins = 6
 
 // NumParsedDevicePins is how many `d`-prefixed pin names the chip's assembler
@@ -514,13 +456,11 @@ func (r Register) String() string {
 	}
 }
 
-// ParseRegister resolves a register name, accepting the sp and ra aliases
-// alongside r0 through r17. It reports false for anything else, including the
-// indirect rr forms, which name a register only at runtime.
-//
-// What follows the r goes through the same integer parse the chip uses, which
-// admits a leading sign and leading zeros: `r05` and `r+5` both name r5. Those
-// spellings are accepted rather than intended, and nothing should emit them.
+// ParseRegister resolves a register name: sp, ra, or r0 through r17. It
+// reports false for anything else, including the rr indirect forms, which
+// name a register only at runtime. Digits after r go through the chip's own
+// integer parse, which admits a leading sign and leading zeros: r05 and r+5
+// both parse as r5.
 func ParseRegister(name string) (Register, bool) {
 	switch name {
 	case "sp":
@@ -539,8 +479,8 @@ func ParseRegister(name string) (Register, bool) {
 	return Register(index), true
 }
 
-// Indexes over the generated tables. Go initialises these after the tables
-// they depend on, so they are ready before any exported lookup can run.
+// Indexes over the tables. Go initialises these after the tables they depend
+// on, so they are ready before any exported lookup can run.
 var (
 	instructionsByMnemonic = indexBy(Instructions, func(i Instruction) string { return i.Mnemonic })
 	logicTypesByName       = indexBy(LogicTypes, func(t LogicTypeInfo) string { return t.Name })
@@ -548,10 +488,21 @@ var (
 	batchModesByName       = indexBy(BatchModes, func(m BatchModeInfo) string { return m.Name })
 	reagentModesByName     = indexBy(ReagentModes, func(m ReagentModeInfo) string { return m.Name })
 	constantsByName        = indexBy(Constants, func(c Constant) string { return strings.ToLower(c.Name) })
-	prefabsByName          = indexBy(Prefabs, func(p PrefabInfo) string { return p.Name })
+	prefabsByName          = indexBy(prefabs, func(p PrefabInfo) string { return p.Name })
 	prefabsByHash          = indexPrefabsByHash()
 	reservedWords          = buildReservedWords()
+	linkingOps             = indexLinkingOps()
 )
+
+func indexLinkingOps() map[Opcode]bool {
+	ops := make(map[Opcode]bool)
+	for _, instruction := range Instructions {
+		if instruction.WritesImplicitly(RegRA) {
+			ops[instruction.Opcode] = true
+		}
+	}
+	return ops
+}
 
 func indexBy[T any](entries []T, key func(T) string) map[string]T {
 	m := make(map[string]T, len(entries))
@@ -600,29 +551,25 @@ func LookupPrefab(name string) (PrefabInfo, bool) {
 	return prefab, ok
 }
 
-// LookupPrefabHash resolves the prefab a batch instruction operand names.
-//
-// A false answer means the build ships no such thing, which for a hash a
-// program computed or spelled out is the strongest statement available: the
-// batch forms report no error for a hash that matches nothing, they just do
-// nothing.
+// LookupPrefabHash resolves the prefab a batch instruction operand names. A
+// false answer means the build ships no such thing — the batch forms
+// themselves report no error for a hash that matches nothing.
 func LookupPrefabHash(hash int32) (PrefabInfo, bool) {
 	prefab, ok := prefabsByHash[hash]
 	return prefab, ok
 }
 
 // indexPrefabsByHash indexes the prefab table by the number an instruction
-// carries. The game builds its own lookup with Dictionary.Add, so a shipping
-// build cannot hold a collision; extraction checks that rather than assuming
-// it, and the first entry wins here if one ever appears.
+// carries. A shipping build holds no hash collision; the first entry wins
+// here if one somehow appears.
 func indexPrefabsByHash() map[int32]PrefabInfo {
-	prefabs := make(map[int32]PrefabInfo, len(Prefabs))
-	for _, prefab := range Prefabs {
-		if _, taken := prefabs[prefab.Hash]; !taken {
-			prefabs[prefab.Hash] = prefab
+	byHash := make(map[int32]PrefabInfo, len(prefabs))
+	for _, prefab := range prefabs {
+		if _, taken := byHash[prefab.Hash]; !taken {
+			byHash[prefab.Hash] = prefab
 		}
 	}
-	return prefabs
+	return byHash
 }
 
 // LookupConstant resolves a named numeric constant. The chip compares constant
@@ -673,13 +620,9 @@ func buildReservedWords() map[string]bool {
 	return words
 }
 
-// IsReservedWord reports whether the chip's assembler already resolves name to
-// something of its own.
-//
-// A label or define that collides is not rejected. It is shadowed, and every
-// instruction referring to it then faults at runtime, once per tick,
-// indefinitely. Name mangling must consult this. The comparison is
-// case-insensitive, which over-reserves the case-sensitive namespaces on
-// purpose: a wrongly rejected candidate name costs nothing, a collision costs
-// a silently broken program.
+// IsReservedWord reports whether the chip's assembler already resolves
+// name to something of its own. A colliding label or define is not
+// rejected: it is shadowed and faults every tick at runtime. The
+// comparison is case-insensitive on purpose — over-reserving costs
+// nothing, a missed collision breaks a program silently.
 func IsReservedWord(name string) bool { return reservedWords[strings.ToLower(name)] }

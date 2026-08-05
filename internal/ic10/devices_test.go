@@ -1,16 +1,20 @@
 package ic10
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/greg2010/ic11c/internal/isa"
+)
 
 // TestPrefabTable checks the shape of the generated table itself, so a
 // re-extraction that lost half the roster or dropped the hashes is caught here
 // rather than by whatever reads it.
 func TestPrefabTable(t *testing.T) {
-	if len(Prefabs) == 0 {
+	if len(prefabs) == 0 {
 		t.Fatal("prefab table is empty")
 	}
-	seen := make(map[int32]string, len(Prefabs))
-	for _, prefab := range Prefabs {
+	seen := make(map[int32]string, len(prefabs))
+	for _, prefab := range prefabs {
 		if prefab.Name == "" {
 			t.Fatalf("prefab with hash %d is unnamed", prefab.Hash)
 		}
@@ -41,19 +45,19 @@ func TestPrefabPropertiesAreDeclared(t *testing.T) {
 	for _, info := range LogicSlotTypes {
 		slotTypes[info.Value] = true
 	}
-	for _, prefab := range Prefabs {
+	for _, prefab := range prefabs {
 		for _, entry := range prefab.logic {
-			if !logicTypes[entry.logicType] {
-				t.Errorf("%s names logic type %d, which LogicTypes does not declare", prefab.Name, entry.logicType)
+			if !logicTypes[LogicType(entry.LogicType)] {
+				t.Errorf("%s names logic type %d, which LogicTypes does not declare", prefab.Name, entry.LogicType)
 			}
-			if entry.allows == accessNone {
-				t.Errorf("%s lists logic type %d with no access", prefab.Name, entry.logicType)
+			if entry.Allows == isa.AccessNone {
+				t.Errorf("%s lists logic type %d with no access", prefab.Name, entry.LogicType)
 			}
 		}
 		for i, slot := range prefab.Slots {
 			for _, entry := range slot.types {
-				if !slotTypes[entry.slotType] {
-					t.Errorf("%s slot %d names slot type %d, which LogicSlotTypes does not declare", prefab.Name, i, entry.slotType)
+				if !slotTypes[LogicSlotType(entry.SlotType)] {
+					t.Errorf("%s slot %d names slot type %d, which LogicSlotTypes does not declare", prefab.Name, i, entry.SlotType)
 				}
 			}
 		}
@@ -93,8 +97,8 @@ func TestLookupPrefab(t *testing.T) {
 // TestLookupPrefabHashRejectsAnUnusedHash covers what makes an arbitrary
 // __ic_hash argument checkable at all: a number naming nothing in this build.
 func TestLookupPrefabHashRejectsAnUnusedHash(t *testing.T) {
-	used := make(map[int32]bool, len(Prefabs))
-	for _, prefab := range Prefabs {
+	used := make(map[int32]bool, len(prefabs))
+	for _, prefab := range prefabs {
 		used[prefab.Hash] = true
 	}
 	var unused int32 = 1
@@ -112,22 +116,22 @@ func TestKnownSurfaces(t *testing.T) {
 	tests := []struct {
 		prefab    string
 		logicType string
-		want      access
+		want      isa.Access
 	}{
 		// The housing a chip runs in reads and writes its own Setting.
-		{prefab: "StructureCircuitHousing", logicType: "Setting", want: accessReadWrite},
+		{prefab: "StructureCircuitHousing", logicType: "Setting", want: isa.AccessReadWrite},
 		// Power is a reading, not a switch; On is the switch.
-		{prefab: "StructureSatelliteDish", logicType: "Power", want: accessRead},
-		{prefab: "StructureSatelliteDish", logicType: "Setting", want: accessReadWrite},
+		{prefab: "StructureSatelliteDish", logicType: "Power", want: isa.AccessRead},
+		{prefab: "StructureSatelliteDish", logicType: "Setting", want: isa.AccessReadWrite},
 		// A wall cooler exposes no temperature, and a batch read of one over a
 		// bank of them returns NaN rather than an error.
-		{prefab: "StructureWallCooler", logicType: "Temperature", want: accessNone},
+		{prefab: "StructureWallCooler", logicType: "Temperature", want: isa.AccessNone},
 		// A wall light has no Setting to write.
-		{prefab: "StructureWallLight", logicType: "Setting", want: accessNone},
-		{prefab: "StructureWallLight", logicType: "On", want: accessReadWrite},
+		{prefab: "StructureWallLight", logicType: "Setting", want: isa.AccessNone},
+		{prefab: "StructureWallLight", logicType: "On", want: isa.AccessReadWrite},
 		// A gas sensor reads its atmosphere and accepts nothing.
-		{prefab: "StructureGasSensor", logicType: "Pressure", want: accessRead},
-		{prefab: "StructureGasSensor", logicType: "Setting", want: accessNone},
+		{prefab: "StructureGasSensor", logicType: "Pressure", want: isa.AccessRead},
+		{prefab: "StructureGasSensor", logicType: "Setting", want: isa.AccessNone},
 	}
 	for _, tt := range tests {
 		t.Run(tt.prefab+"."+tt.logicType, func(t *testing.T) {
@@ -158,42 +162,39 @@ func TestSlotAccessFor(t *testing.T) {
 	if !ok {
 		t.Fatal("this build has no Occupied slot type")
 	}
-	if got := prefab.Slots[0].accessFor(occupied.Value); got != accessRead {
-		t.Errorf("slot 0 Occupied = %s, want %s", got, accessRead)
+	if got := prefab.Slots[0].accessFor(occupied.Value); got != isa.AccessRead {
+		t.Errorf("slot 0 Occupied = %s, want %s", got, isa.AccessRead)
 	}
-	if got := prefab.Slots[0].accessFor(LogicSlotType(200)); got != accessNone {
-		t.Errorf("slot 0 of an undeclared property = %s, want %s", got, accessNone)
+	if got := prefab.Slots[0].accessFor(LogicSlotType(200)); got != isa.AccessNone {
+		t.Errorf("slot 0 of an undeclared property = %s, want %s", got, isa.AccessNone)
 	}
 }
 
 // TestAccessRefusals covers the one rule a consumer must not get wrong: an
-// undecided pair refuses neither direction, so a check written against it
-// reports nothing rather than reporting something false.
-//
-// The last case is an access no extraction produces today. It is here because
-// the answer for one has to be the same as for an undecided pair: a table that
-// learns a new answer before these two do must not start rejecting programs on
-// the strength of it.
+// undecided pair refuses neither direction. Access(9), a value no
+// extraction produces today, is included because it must answer the same
+// as isa.AccessUnknown — a new access learned before these two must not
+// start rejecting programs on the strength of it.
 func TestAccessRefusals(t *testing.T) {
 	tests := []struct {
-		access       access
+		access       isa.Access
 		refusesRead  bool
 		refusesWrite bool
 		rendered     string
 	}{
-		{access: accessNone, refusesRead: true, refusesWrite: true, rendered: "none"},
-		{access: accessRead, refusesWrite: true, rendered: "read"},
-		{access: accessWrite, refusesRead: true, rendered: "write"},
-		{access: accessReadWrite, rendered: "readwrite"},
-		{access: accessUnknown, rendered: "unknown"},
-		{access: access(9), rendered: "access(9)"},
+		{access: isa.AccessNone, refusesRead: true, refusesWrite: true, rendered: "none"},
+		{access: isa.AccessRead, refusesWrite: true, rendered: "read"},
+		{access: isa.AccessWrite, refusesRead: true, rendered: "write"},
+		{access: isa.AccessReadWrite, rendered: "readwrite"},
+		{access: isa.AccessUnknown, rendered: "unknown"},
+		{access: isa.Access(9), rendered: "Access(9)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.rendered, func(t *testing.T) {
-			if got := tt.access.refusesRead(); got != tt.refusesRead {
+			if got := refusesRead(tt.access); got != tt.refusesRead {
 				t.Errorf("refusesRead = %v, want %v", got, tt.refusesRead)
 			}
-			if got := tt.access.refusesWrite(); got != tt.refusesWrite {
+			if got := refusesWrite(tt.access); got != tt.refusesWrite {
 				t.Errorf("refusesWrite = %v, want %v", got, tt.refusesWrite)
 			}
 			if got := tt.access.String(); got != tt.rendered {
@@ -232,11 +233,11 @@ func TestRefusesReachesTheTable(t *testing.T) {
 		t.Fatal("this build ships no StructureLogicMirror")
 	}
 	for _, entry := range mirror.logic {
-		if entry.allows != accessUnknown {
+		if entry.Allows != isa.AccessUnknown {
 			continue
 		}
-		if mirror.RefusesRead(entry.logicType) || mirror.RefusesWrite(entry.logicType) {
-			t.Fatalf("logic type %d is undecided on a logic mirror and was refused anyway", entry.logicType)
+		if mirror.RefusesRead(LogicType(entry.LogicType)) || mirror.RefusesWrite(LogicType(entry.LogicType)) {
+			t.Fatalf("logic type %d is undecided on a logic mirror and was refused anyway", entry.LogicType)
 		}
 	}
 
@@ -261,9 +262,9 @@ func TestRefusesReachesTheTable(t *testing.T) {
 // would mean the marking was lost, not that the game became decidable.
 func TestUndecidedSurfacesAreMarked(t *testing.T) {
 	undecided := 0
-	for _, prefab := range Prefabs {
+	for _, prefab := range prefabs {
 		for _, entry := range prefab.logic {
-			if entry.allows == accessUnknown {
+			if entry.Allows == isa.AccessUnknown {
 				undecided++
 			}
 		}

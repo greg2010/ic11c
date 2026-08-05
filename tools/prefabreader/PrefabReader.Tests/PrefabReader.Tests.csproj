@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <RootNamespace>PrefabReader.Tests</RootNamespace>
+    <AssemblyName>PrefabReader.Tests</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <!-- The reader targets the runtime the release image ships. A developer
+         box with only a later runtime installed would otherwise be unable to
+         run these at all, and a test suite nobody can run is how the last
+         silent gate survived. -->
+    <RollForward>Major</RollForward>
+    <!-- The reader pins its transitives for the reason its own project file
+         gives. A test project whose graph floats is a suite that can pass here
+         against packages the reader was never built beside, so it is locked
+         too. Regenerate the lock with a restore run with the force-evaluate
+         option. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode>true</RestoreLockedMode>
+    <!-- This assembly is the fixture the reader's version gate is exercised
+         against: Cecil creates an assembly with no Win32 version resource and
+         carries through the one an assembly it rewrites already had, so the
+         only file on hand carrying that resource is one the build produced. The
+         four parts are pairwise distinct so that the order they are read and
+         joined in is pinned, and FileVersion is left differing from the default
+         1.0.0 Version so that a reader taking the wrong one of the two is
+         pinned too. The resource and the managed attributes are both stamped
+         from this one number, so a fixture that only reads is blind to which of
+         them a reader took; the test that rewrites the resource in the file is
+         what tells them apart. -->
+    <FileVersion>1.2.3.4</FileVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../PrefabReader.csproj" />
+  </ItemGroup>
+</Project>

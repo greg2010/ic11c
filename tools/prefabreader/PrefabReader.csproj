@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AssemblyName>prefabreader</AssemblyName>
+    <RootNamespace>PrefabReader</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- The framework is the one the release image's SDK pins and CI installs,
+         so the target stays where the build that matters can compile it. Rolling
+         forward is what makes the published dll launch anywhere else: a box with
+         only a later runtime otherwise gets a build that succeeds and a tool
+         that cannot start, which is a failure nothing here would report. -->
+    <RollForward>Major</RollForward>
+    <!-- The two references below pin themselves, but their transitives float,
+         and this reader's output is the prefab half of the checked-in device
+         tables. Locked mode fails the restore rather than resolving a graph
+         the checked-in packages.lock.json does not describe, so moving a
+         dependency is a reviewable diff instead of a silent one. Regenerate
+         the lock with a restore run with the force-evaluate option. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode>true</RestoreLockedMode>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- AssetsTools.NET reads the serialized files; the MonoCecil companion
+         synthesises the per-script field layouts they ship no type trees for.
+         Mono.Cecil arrives under that companion either way and is named here
+         because this reader also asks the assembly directly which classes
+         declare the fields it takes off an asset by name, which the
+         synthesised layout cannot answer. -->
+    <PackageReference Include="AssetsTools.NET" Version="3.0.4" />
+    <PackageReference Include="AssetsTools.NET.MonoCecil" Version="3.0.4" />
+    <PackageReference Include="Mono.Cecil" Version="0.11.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The tests sit under this project's directory, so the SDK's recursive
+         source glob would otherwise compile them into the reader itself. The
+         release image publishes this project by pointing at its directory, and
+         a stray test reference would break that build rather than any test
+         run. -->
+    <Compile Remove="PrefabReader.Tests/**" />
+    <InternalsVisibleTo Include="PrefabReader.Tests" />
+  </ItemGroup>
+</Project>

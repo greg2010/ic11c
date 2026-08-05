@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/greg2010/ic11c/internal/isa"
 )
 
 // TestTableSizes pins the shape of the target machine. A change here means the
@@ -35,10 +37,9 @@ func TestTableSizes(t *testing.T) {
 }
 
 // TestOperandEnumWidths pins the integer each operand enum is carried in.
-// Only LogicType and LogicSlotType narrow; batch method and reagent mode take
-// the full int range. A regeneration that narrowed a mode to a byte would fold
-// 256, which the game leaves undefined, onto mode 0, which is defined — the
-// program then reads the wrong aggregate for good and nothing faults.
+// Only LogicType and LogicSlotType narrow; a regeneration that narrowed
+// BatchMode to a byte would fold 256 (undefined) onto mode 0 (defined),
+// and nothing would fault.
 func TestOperandEnumWidths(t *testing.T) {
 	tests := []struct {
 		name string
@@ -86,7 +87,7 @@ func TestOpcodeInstruction(t *testing.T) {
 		mnemonic string
 	}{
 		{name: "first", op: 0, wantOK: true, mnemonic: "l"},
-		{name: "add", op: OpAdd, wantOK: true, mnemonic: "add"},
+		{name: "add", op: isa.OpAdd, wantOK: true, mnemonic: "add"},
 		{name: "last", op: Opcode(len(Instructions) - 1), wantOK: true, mnemonic: "ror"},
 		{name: "past the end", op: Opcode(len(Instructions)), wantOK: false, mnemonic: "Opcode(154)"},
 	}
@@ -434,15 +435,11 @@ func TestExamplesMatchOperands(t *testing.T) {
 	}
 }
 
-// TestWriteIndex covers what the table can say about direction, including the
-// two things this build's table happens not to contain.
-//
-// The unnamed, register-only first operand used to be how the compiler decided
-// what an instruction writes. The third and fourth cases are what that rule
-// gets wrong: a write outside first position reads as no write at all, and an
-// operand the extraction could not read reads as a plain source. Both leave
-// allocation confident about a register whose value is gone, which is the one
-// failure this machine gives no diagnostic for.
+// TestWriteIndex covers what the table can say about a write, including
+// two cases a bare "first operand" rule gets wrong: a write outside first
+// position reads as no write, and an unread-direction operand reads as a
+// plain source. Both would leave allocation confident about a register
+// whose value is gone.
 func TestWriteIndex(t *testing.T) {
 	register := []OperandKind{OperandRegister}
 	tests := []struct {

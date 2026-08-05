@@ -9,9 +9,8 @@ import (
 	"testing"
 
 	"github.com/greg2010/ic11c/internal/ic10"
-	"github.com/greg2010/ic11c/internal/ic10tables"
-	"github.com/greg2010/ic11c/internal/parser"
 	"github.com/greg2010/ic11c/internal/sema"
+	"github.com/greg2010/ic11c/internal/tsparse"
 )
 
 // devEnumPattern matches the enumeration the header spells the device pins as,
@@ -28,14 +27,12 @@ var (
 // only it.
 var constantPattern = regexp.MustCompile(`(?m)^constexpr double ([A-Za-z_][A-Za-z0-9_]*) = `)
 
-// TestPreludeDeclaresThePinsMicroCResolves holds the header's device enum to the
-// pins analysis actually resolves.
-//
-// cmd/isagen writes the enum from a copy of the limit rather than from sema's,
-// because it cannot depend on the package built on the tables it generates.
-// Nothing but this ties the two: a housing that grew a pin would otherwise leave
-// an editor reporting an error on a program the compiler accepts, and a housing
-// that lost one would leave it silent about a program the compiler rejects.
+// TestPreludeDeclaresThePinsMicroCResolves holds the header's device enum
+// to the pins analysis actually resolves — nothing else ties the two,
+// since tools/isagen writes the enum from its own copy of the limit and
+// cannot depend on sema. A housing that grew a pin would otherwise leave
+// an editor erroring on a program the compiler accepts, and one that lost
+// a pin would leave it silent about a program the compiler rejects.
 func TestPreludeDeclaresThePinsMicroCResolves(t *testing.T) {
 	declared := declaredPins(t)
 	// One past the highest pin declared rather than one past how many are, so
@@ -54,13 +51,11 @@ func TestPreludeDeclaresThePinsMicroCResolves(t *testing.T) {
 	}
 }
 
-// TestPreludeDeclaresTheConstantsMicroCPredeclares holds the header's constant
-// list to the names analysis predeclares.
-//
-// Both directions matter, and the machine carries constants MicroC does not
-// expose, so the ones the header leaves out are checked to still be names a
-// program cannot use. A constant added to the language and not to the header
-// would otherwise be an editor error on a program that compiles.
+// TestPreludeDeclaresTheConstantsMicroCPredeclares holds the header's
+// constant list to the names analysis predeclares, in both directions: the
+// machine carries constants MicroC does not expose, so the ones the header
+// leaves out are checked to still be names a program cannot use. Missing
+// the other way would be an editor error on a program that compiles.
 func TestPreludeDeclaresTheConstantsMicroCPredeclares(t *testing.T) {
 	declared := declaredConstants(t)
 	for _, constant := range ic10.Constants {
@@ -120,11 +115,14 @@ func declaredConstants(t *testing.T) map[string]bool {
 // them is wrong with this file.
 func analyzes(t *testing.T, src string) bool {
 	t.Helper()
-	file, diags := parser.Parse("prelude_test.c", src)
+	file, diags, err := tsparse.Parse("prelude_test.c", src)
+	if err != nil {
+		t.Fatalf("parsing\n%s\n: %v", src, err)
+	}
 	if len(diags) != 0 {
 		t.Fatalf("parsing\n%s\nreported %v", src, diags)
 	}
-	_, diags, err := sema.Analyze(context.Background(), file, ic10tables.Tables{})
+	_, diags, err = sema.Analyze(context.Background(), file, sema.Shipped{})
 	if err != nil {
 		t.Fatalf("analyzing\n%s\n: %v", src, err)
 	}
