@@ -252,6 +252,9 @@ jobs:
       actions: read
       contents: write
     steps:
+      # Before the download, because a checkout cleans the workspace it lands in.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: dist-*
@@ -264,7 +267,7 @@ jobs:
       - name: Verify every platform arrived
         run: scripts/verify-release-assets.sh
 
-      - name: Verify every archive carries both members
+      - name: Verify every archive carries its executable
         run: scripts/verify-release-archives.sh
 
       - name: Checksums
