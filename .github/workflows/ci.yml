@@ -79,6 +79,10 @@ jobs:
 
       - run: task lint
 
+      # The C conformance gate inside `task test` runs every driver on PATH.
+      - name: Install a C23-capable gcc
+        run: scripts/setup-c23-gcc.sh
+
       # Cuts the chip out of the decompiled tree and runs the suite against it,
       # so compiled programs execute on the game's own machine. Nothing is
       # conditional on the decompile being present: a cache restore that produced
