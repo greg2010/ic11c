@@ -21,7 +21,7 @@ const dev panel = d1;
 const dev alarm = d2;
 const dev memory = d3;
 
-constexpr long long kModeDefault = 0;
+constexpr long kModeDefault = 0;
 
 constexpr double kCleanTarget = 0.98;
 constexpr double kWasteFloor = 0.5;
@@ -30,16 +30,16 @@ constexpr double kPercent = 100.0;
 constexpr double kBand = 0.05;
 constexpr double kHotKelvin = 340.0;
 
-constexpr long long kDirtyFault = 1;
-constexpr long long kStalledFault = 2;
-constexpr long long kStarvedFault = 4;
-constexpr long long kHotFault = 8;
+constexpr long kDirtyFault = 1;
+constexpr long kStalledFault = 2;
+constexpr long kStarvedFault = 4;
+constexpr long kHotFault = 8;
 
-constexpr long long kModeFilter = 1;
-constexpr long long kModeBypass = 0;
+constexpr long kModeFilter = 1;
+constexpr long kModeBypass = 0;
 
 double rate;
-long long faults;
+long faults;
 
 void main(void) {
     while (true) {

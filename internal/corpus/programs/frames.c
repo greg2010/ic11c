@@ -23,26 +23,26 @@ const dev gauge = d0;
 const dev display = d1;
 const dev alarm = d2;
 
-constexpr long long kWindow = 64;
-constexpr long long kShortRange = 8;
+constexpr long kWindow = 64;
+constexpr long kShortRange = 8;
 constexpr double kAlarmKilopascals = 250.0;
 
 double window[kWindow];
-long long cursor;
-long long filled;
+long cursor;
+long filled;
 
-void selectNth(long long lo, long long hi, long long n);
+void selectNth(long lo, long hi, long n);
 
-void swapAt(long long a, long long b) {
+void swapAt(long a, long b) {
     double t = window[a];
     window[a] = window[b];
     window[b] = t;
 }
 
-long long partitionRange(long long lo, long long hi) {
+long partitionRange(long lo, long hi) {
     double pivot = window[hi];
-    long long cut = lo;
-    for (long long i = lo; i < hi; i++) {
+    long cut = lo;
+    for (long i = lo; i < hi; i++) {
         if (window[i] < pivot) {
             swapAt(i, cut);
             cut++;
@@ -55,13 +55,13 @@ long long partitionRange(long long lo, long long hi) {
 // A short range costs less to order outright than to partition, and a range
 // that turns out long is handed back to the selection -- which is what makes
 // the two mutually recursive rather than each merely recursive.
-void shortPass(long long lo, long long hi, long long n) {
+void shortPass(long lo, long hi, long n) {
     if (hi - lo > kShortRange) {
         selectNth(lo, hi, n);
         return;
     }
-    for (long long i = lo + 1; i <= hi; i++) {
-        long long j = i;
+    for (long i = lo + 1; i <= hi; i++) {
+        long j = i;
         while (j > lo && window[j - 1] > window[j]) {
             swapAt(j - 1, j);
             j--;
@@ -69,7 +69,7 @@ void shortPass(long long lo, long long hi, long long n) {
     }
 }
 
-void selectNth(long long lo, long long hi, long long n) {
+void selectNth(long lo, long hi, long n) {
     if (lo >= hi) {
         return;
     }
@@ -77,7 +77,7 @@ void selectNth(long long lo, long long hi, long long n) {
         shortPass(lo, hi, n);
         return;
     }
-    long long cut = partitionRange(lo, hi);
+    long cut = partitionRange(lo, hi);
     if (n < cut) {
         selectNth(lo, cut - 1, n);
     } else if (n > cut) {
@@ -93,7 +93,7 @@ void main(void) {
             filled++;
         }
 
-        long long middle = filled / 2;
+        long middle = filled / 2;
         selectNth(0, filled - 1, middle);
         double median = window[middle];
 

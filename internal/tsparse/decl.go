@@ -20,22 +20,37 @@ const (
 	prefabAttr    = "prefab"
 )
 
+// scalarTypeAliases are the further spellings a type answers to. long long
+// stays what a diagnostic quotes, since it is the spelling C guarantees at
+// least 64 bits of on every implementation.
+var scalarTypeAliases = map[string]ast.ScalarKind{"long": ast.Int}
+
 // scalarTypes maps every spelling MicroC gives a scalar type to the kind that
-// names it, read out of the syntax tree's own enumeration so a type the
-// language gains is recognized without an edit. It is also the closed set a
-// bare identifier in type position is held to, since MicroC has no typedef.
+// names it: the syntax tree's own enumeration, so a type the language gains
+// needs no edit, plus the aliases above. It is also the closed set a bare
+// identifier in type position is held to, since MicroC has no typedef.
 var scalarTypes = func() map[string]ast.ScalarKind {
 	kinds := ast.ScalarKinds()
-	types := make(map[string]ast.ScalarKind, len(kinds))
+	types := make(map[string]ast.ScalarKind, len(kinds)+len(scalarTypeAliases))
 	for _, kind := range kinds {
 		types[kind.String()] = kind
 	}
+	maps.Copy(types, scalarTypeAliases)
 	return types
 }()
 
 // microCTypes lists what a diagnostic should offer in place of a type MicroC
-// does not have.
-var microCTypes = strings.Join(slices.Sorted(maps.Keys(scalarTypes)), ", ")
+// does not have. It names each kind once, in the spelling a diagnostic quotes,
+// rather than every spelling scalarTypes accepts.
+var microCTypes = func() string {
+	kinds := ast.ScalarKinds()
+	spellings := make([]string, len(kinds))
+	for i, kind := range kinds {
+		spellings[i] = kind.String()
+	}
+	slices.Sort(spellings)
+	return strings.Join(spellings, ", ")
+}()
 
 // typeAdvice answers the C spellings a MicroC program is most likely to reach
 // for with the reason MicroC has something else instead.
@@ -43,7 +58,6 @@ var typeAdvice = map[string]string{
 	"char":  "the 'char' type specifier is not supported in MicroC; a character literal is a long long",
 	"int":   "the 'int' type specifier is not supported in MicroC; C's int is 32 bits and every value here is exact to 53 — write 'long long', which C guarantees at least 64 bits everywhere",
 	"float": "the 'float' type specifier is not supported in MicroC; every register and memory slot holds one whole double, so there is no 32-bit type for it to name — write 'double'",
-	"long":  "MicroC's integer type is 'long long'; 'long' alone is 32 bits on some C implementations, which is narrower than the values this machine holds",
 }
 
 // castTargets are the types a cast may name. A cast to void discards a value an
@@ -501,15 +515,20 @@ func (c *converter) spelled(words []*ts.Node) string {
 	return strings.Join(parts, " ")
 }
 
-// spelledPast gives the first size word past the type the words in front of
-// it already spell, and says whether the source writes one. "long long long"
-// is the only shape that reaches it, since long long is MicroC's one
-// multi-word type; the third word is the declared name, not part of a type.
+// spelledPast gives the size word past the type the words in front of it
+// already spell, and says whether the source writes one. Only a repeated word
+// counts: a different word spells something else, and naming the whole spelling
+// is what tells the reader "long double" is a C type MicroC does not have.
 func (c *converter) spelledPast(words []*ts.Node) (*ts.Node, bool) {
 	for i := len(words) - 1; i > 0; i-- {
-		if _, isType := scalarTypes[c.spelled(words[:i])]; isType {
-			return words[i], true
+		if _, isType := scalarTypes[c.spelled(words[:i])]; !isType {
+			continue
 		}
+		text := c.text(words[i])
+		if !slices.ContainsFunc(words[:i], func(w *ts.Node) bool { return c.text(w) == text }) {
+			return nil, false
+		}
+		return words[i], true
 	}
 	return nil, false
 }

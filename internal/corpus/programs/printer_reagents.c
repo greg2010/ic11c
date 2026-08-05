@@ -21,13 +21,13 @@ const dev vender = d1;
 const dev display = d2;
 const dev memory = d3;
 
-constexpr long long kOres = 4;
+constexpr long kOres = 4;
 constexpr double kRestockMass = 5.0;
-constexpr long long kModeDefault = 0;
+constexpr long kModeDefault = 0;
 
-long long ores[kOres];
+long ores[kOres];
 double deficit[kOres];
-long long worst;
+long worst;
 
 void nameOres(void) {
     ores[0] = __ic_hash("Copper");
@@ -38,7 +38,7 @@ void nameOres(void) {
 
 // A reagent the printer has never held reads NaN rather than zero, and a
 // shortfall computed from one would poison the sum it feeds.
-double shortfall(long long ore) {
+double shortfall(long ore) {
     double have = __ic_load_reagent(printer, Contents, ore);
     double need = __ic_load_reagent(printer, Required, ore);
     if (__ic_isnan(have) || __ic_isnan(need)) {
@@ -55,7 +55,7 @@ void main(void) {
         double peak = 0.0;
         worst = -1;
 
-        for (long long i = 0; i < kOres; i++) {
+        for (long i = 0; i < kOres; i++) {
             double missing = shortfall(ores[i]);
             deficit[i] = missing;
             if (missing > peak) {

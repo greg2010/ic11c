@@ -18,13 +18,13 @@ const dev pump = d2;
 const dev lowDial = d3;
 const dev highDial = d4;
 
-constexpr long long kIdle = 0;
-constexpr long long kPumping = 1;
-constexpr long long kOpening = 2;
-constexpr long long kFault = 3;
+constexpr long kIdle = 0;
+constexpr long kPumping = 1;
+constexpr long kOpening = 2;
+constexpr long kFault = 3;
 
-long long state;
-long long retries;
+long state;
+long retries;
 double evacuateBelow;
 
 void swap(double *a, double *b) {
@@ -33,7 +33,7 @@ void swap(double *a, double *b) {
     *b = t;
 }
 
-long long gcd(long long a, long long b) {
+long gcd(long a, long b) {
     if (b == 0) {
         return a;
     }

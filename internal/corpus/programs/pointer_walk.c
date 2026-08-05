@@ -25,16 +25,16 @@ const dev display = d1;
 const dev alarm = d2;
 const dev memory = d3;
 
-constexpr long long kModeDefault = 0;
+constexpr long kModeDefault = 0;
 
-constexpr long long kWindow = 16;
+constexpr long kWindow = 16;
 constexpr double kOutlierBand = 25.0;
 
 double window[kWindow];
-long long cursor;
-long long filled;
+long cursor;
+long filled;
 
-double meanFrom(const double *first, long long count) {
+double meanFrom(const double *first, long count) {
     const double *last = first + count - 1;
     const double *p = first;
     double sum = 0.0;
@@ -47,7 +47,7 @@ double meanFrom(const double *first, long long count) {
 
 // Walk inward from both ends while the sample under either pointer sits outside
 // the band, and stop as soon as both are inside it.
-long long trimFrom(const double *first, long long count, double centre) {
+long trimFrom(const double *first, long count, double centre) {
     const double *lo = first;
     const double *hi = first + count - 1;
     while (lo < hi) {
@@ -71,7 +71,7 @@ void main(void) {
         }
 
         double centre = window[filled / 2];
-        long long span = trimFrom(window, filled, centre);
+        long span = trimFrom(window, filled, centre);
         double mean = meanFrom(window, filled);
 
         __ic_store(display, Setting, mean);

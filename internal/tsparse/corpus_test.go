@@ -118,6 +118,20 @@ func TestTheFragmentsAreRead(t *testing.T) {
 		{"attributed declaration as a body followed by a statement", "void f(long long x) { if (x) [[ic11c::prefab(\"StructureGasSensor\")]] const dev d = d0; x = 2; }\n"},
 		// A word the C grammar reserves and C23 does not is an ordinary name,
 		// which is what internal/lexer says it is. See internal/tsparse/words.go.
+		// long is the second spelling of the integer type, and every position
+		// the language puts a type in reaches it by a different production.
+		{"the short spelling at file scope", "long a;\n"},
+		{"the short spelling on a local", "void main(void) { long a = 1; }\n"},
+		{"the short spelling on a parameter", "void f(long x);\n"},
+		{"the short spelling as a return type", "long f(void);\n"},
+		{"the short spelling on an array", "long a[2];\n"},
+		{"the short spelling on a pointer", "long *p;\n"},
+		{"the short spelling on a pointer to const", "long a;\nconst long *p = &a;\n"},
+		{"the short spelling in a cast", "void f(long long x) { x = (long)x; }\n"},
+		{"the short spelling on a constant", "const long k = 3;\n"},
+		{"the short spelling on a constexpr", "constexpr long c = 4;\n"},
+		{"the short spelling as an unbraced body", "void f(long long x) { if (x) long a; }\n"},
+		{"the canonical spelling at file scope", "long long a;\n"},
 		{"a name the grammar reserves", "void f(void) { long long asm = 1; asm = 2; }\n"},
 		{"a name the grammar reserves in a call", "long long offsetof(long long noreturn) { return noreturn; }\n"},
 		{"names the grammar reserves in an expression", "long long f(long long NULL) { return NULL + __attribute__; }\n"},

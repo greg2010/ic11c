@@ -7,7 +7,8 @@
 // is left, and rolls once the room is gone. Every value it holds is one a
 // double and a 64-bit integer both denote, which is what lets the ledger mean
 // the same thing to the chip and to a compiler whose long long really is 64
-// bits.
+// bits. `long` is the same type here and is not written for that reason:
+// kCeiling and kDelivery both sit past the 32 bits C guarantees a long.
 //
 // The probe beside it is where that stops being true. It walks a plain double
 // through 2^53 - 2, 2^53 - 1 and 2^53 and asks at each what the smallest step

@@ -413,6 +413,52 @@ void main(void) {
 }
 `,
 		},
+		// long and long long are one type, so each row writes both spellings
+		// where a second type would be caught: a redeclaration, a call, a
+		// pointee, an operand.
+		{
+			name: "a prototype and its definition spell the type differently",
+			src: `long long f(long x);
+long f(long long x) {
+    return x;
+}
+void main(void) {
+    __ic_sleep(f(1));
+}
+`,
+		},
+		{
+			name: "two declarations of one function spell the type differently",
+			src: `void f(long);
+void f(long long x) {
+    __ic_sleep(x);
+}
+void main(void) {
+    f(1);
+}
+`,
+		},
+		{
+			name: "a pointer to the short spelling addresses the canonical one",
+			src: `long g(const long *p) {
+    return *p;
+}
+void main(void) {
+    long long a = 1;
+    __ic_sleep(g(&a));
+}
+`,
+		},
+		{
+			name: "the two spellings are one type in an expression",
+			src: `void main(void) {
+    long a = 1;
+    long long b = 2;
+    long c = a + b;
+    __ic_sleep(c);
+}
+`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1353,6 +1399,17 @@ void main(void) {
 }
 `,
 			want: "'d7' is not a device",
+		},
+		{
+			// An object declared with the short spelling is named by the
+			// canonical one in every message about it.
+			name: "the short spelling is reported as the canonical one",
+			src: `void main(void) {
+    long a = 1;
+    double *p = /*!*/&a;
+}
+`,
+			want: "cannot use long long * as double * in the initializer of 'p'",
 		},
 	}
 

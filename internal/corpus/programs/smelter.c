@@ -20,14 +20,14 @@
 [[ic11c::prefab("StructureFurnace")]] const dev furnace = d0;
 const dev display = d1;
 
-constexpr long long kInputSlot = 0;
-constexpr long long kOutputSlot = 1;
+constexpr long kInputSlot = 0;
+constexpr long kOutputSlot = 1;
 
-long long stock;
+long stock;
 
 void main(void) {
-    long long furnaces = __ic_hash("StructureFurnace");
-    long long north = __ic_hash("north");
+    long furnaces = __ic_hash("StructureFurnace");
+    long north = __ic_hash("north");
 
     while (true) {
         double onHand = __ic_load_slot(furnace, kInputSlot, SlotType_Quantity);
@@ -38,7 +38,7 @@ void main(void) {
         __ic_store(furnace, Lock, loaded > 0.0);
         __ic_store_batch(furnaces, Activate, onHand > 0.0);
 
-        stock = (long long)__ic_min(onHand, bankLow);
+        stock = (long)__ic_min(onHand, bankLow);
         __ic_store(display, Setting, __ic_isnan(heat) ? 0 : stock);
         __ic_yield();
     }

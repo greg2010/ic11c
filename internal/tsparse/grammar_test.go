@@ -435,17 +435,23 @@ func TestQualifiersTellConstFromConstexpr(t *testing.T) {
 }
 
 // TestScalarTypesComeFromTheTree checks the derivation the closed set of type
-// names rests on: every spelling it found is one the lexer scans as a keyword,
-// so a spelling holding an identifier -- which is what a gap in the tree's own
-// name table would produce -- is caught here rather than admitted as a type.
+// names rests on: every kind is keyed by its own spelling, no alias has
+// displaced one, and every spelling is one the lexer scans as a keyword, so a
+// spelling holding an identifier -- which is what a gap in the tree's own name
+// table would produce -- is caught here rather than admitted as a type.
 func TestScalarTypesComeFromTheTree(t *testing.T) {
 	if len(scalarTypes) == 0 {
 		t.Fatal("no scalar types were derived, so every identifier in type position would be refused")
 	}
-	for name, kind := range scalarTypes {
-		if kind.String() != name {
-			t.Errorf("%v is keyed by %q", kind, name)
+	for _, kind := range ast.ScalarKinds() {
+		if got, spelled := scalarTypes[kind.String()]; !spelled || got != kind {
+			t.Errorf("%v is not keyed by its own spelling %q", kind, kind.String())
 		}
+	}
+	if want := len(ast.ScalarKinds()) + len(scalarTypeAliases); len(scalarTypes) != want {
+		t.Errorf("the set holds %d spellings, want %d; an alias has displaced a type's own spelling", len(scalarTypes), want)
+	}
+	for name, kind := range scalarTypes {
 		// A type is spelled with keywords alone, so the whole spelling scans
 		// without producing an identifier.
 		l := lexer.New("test.c", name)
@@ -456,6 +462,18 @@ func TestScalarTypesComeFromTheTree(t *testing.T) {
 		}
 		if diags := l.Diagnostics(); len(diags) != 0 {
 			t.Errorf("the spelling %q of %v does not lex cleanly:\n%s", name, kind, diags)
+		}
+	}
+}
+
+// TestTypeAdviceAnswersOnlyForSpellingsMicroCLacks holds the advice table to
+// the spellings that can reach it: [converter.notAType] consults it only where
+// the spelling is outside [scalarTypes], so an entry for a type MicroC has is
+// dead and nothing else would say so.
+func TestTypeAdviceAnswersOnlyForSpellingsMicroCLacks(t *testing.T) {
+	for spelling := range typeAdvice {
+		if _, isType := scalarTypes[spelling]; isType {
+			t.Errorf("typeAdvice answers for %q, which MicroC spells a type with", spelling)
 		}
 	}
 }

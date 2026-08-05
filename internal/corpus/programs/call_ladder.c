@@ -25,14 +25,14 @@
 const dev display = d0;
 const dev report = d1;
 
-constexpr long long kModeDefault = 0;
+constexpr long kModeDefault = 0;
 
-constexpr long long kOrder = 2;
-constexpr long long kRungs = 5;
+constexpr long kOrder = 2;
+constexpr long kRungs = 5;
 
-long long rung;
+long rung;
 
-long long ladder(long long order, long long step) {
+long ladder(long order, long step) {
     if (order == 0) {
         return step + 1;
     }
@@ -44,8 +44,8 @@ long long ladder(long long order, long long step) {
 
 void main(void) {
     while (true) {
-        long long height = ladder(kOrder, rung);
-        long long lifted = ladder(kOrder - 1, height);
+        long height = ladder(kOrder, rung);
+        long lifted = ladder(kOrder - 1, height);
 
         __ic_store(display, Setting, height);
         __ic_store(display, Mode, kModeDefault);

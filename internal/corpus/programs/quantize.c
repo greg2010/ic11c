@@ -22,7 +22,7 @@ const dev tally = d2;
 const dev memory = d3;
 
 // A console shows a raw number under mode 0, which is what these are.
-constexpr long long kModeDefault = 0;
+constexpr long kModeDefault = 0;
 
 constexpr double kQuantum = 0.25;
 constexpr double kScale = 1000.0;

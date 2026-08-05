@@ -26,23 +26,23 @@ const dev pump = d2;
 const dev panel = d3;
 
 // Dial positions.
-constexpr long long kOff = 0;
-constexpr long long kExhaust = 1;
-constexpr long long kPurge = 2;
-constexpr long long kFill = 3;
-constexpr long long kSeal = 4;
+constexpr long kOff = 0;
+constexpr long kExhaust = 1;
+constexpr long kPurge = 2;
+constexpr long kFill = 3;
+constexpr long kSeal = 4;
 
 // The vent's own enumeration, which is all its Mode accepts.
-constexpr long long kVentOutward = 0;
-constexpr long long kVentInward = 1;
+constexpr long kVentOutward = 0;
+constexpr long kVentInward = 1;
 
-constexpr long long kModeDefault = 0;
+constexpr long kModeDefault = 0;
 
-long long ticks;
+long ticks;
 
 void main(void) {
     for (;;) {
-        long long mode = (long long)__ic_load(dial, Setting);
+        long mode = (long)__ic_load(dial, Setting);
 
         switch (mode) {
         case kOff:

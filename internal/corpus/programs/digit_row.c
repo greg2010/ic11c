@@ -20,15 +20,15 @@ const dev gauge = d0;
 const dev lamp = d1;
 const dev column = d2;
 
-constexpr long long kColumns = 5;
-constexpr long long kCeiling = 99999;
-constexpr long long kBlank = -1;
+constexpr long kColumns = 5;
+constexpr long kCeiling = 99999;
+constexpr long kBlank = -1;
 
-long long digits[kColumns];
-long long value;
-long long place;
-long long cursor;
-long long scan;
+long digits[kColumns];
+long value;
+long place;
+long cursor;
+long scan;
 
 void render(void) {
     if (place * 10 <= value) {
@@ -42,7 +42,7 @@ void render(void) {
 
 void main(void) {
     while (true) {
-        value = (long long)__ic_load(gauge, Setting);
+        value = (long)__ic_load(gauge, Setting);
         if (value < 0) {
             value = 0;
         }

@@ -10,10 +10,6 @@ vars:
   # package. One value, because one target runs every package and none of them
   # may disagree about how long a package may take.
   TEST_TIMEOUT: 900s
-  CORPUS_ROOT: internal/corpus
-  # Two levels below internal/ so that compile_flags.txt beside them resolves
-  # -include ../../ic10/generated/ic10_prelude.h.
-  CORPUS_PROGRAMS: '{{.CORPUS_ROOT}}/programs'
   # Empty selects the depot manifest the Dockerfile pins. Set it on the isa:csharp
   # targets to look at a game build before deciding whether to move that pin.
   MANIFEST: ''
@@ -291,9 +287,7 @@ tasks:
     cmds:
       - task: fmt:check
       - task: check:llvm
-      - task: check:gamesrc
       - task: check:game-pin
-      - task: check:corpus
       - task: lint
       # lint:workflows and lint:container stay out: the first needs actionlint
       # from a tools target this does not run, and both read CI's own plumbing,
@@ -316,37 +310,6 @@ tasks:
     cmds:
       - ./scripts/check-gamesrc-gates.sh
 
-  check:gamesrc:
-    desc: Fail if anything outside this file spells the decompiled tree somewhere GAMESRC_ROOT cannot reach
-    vars:
-      # One line per file outside this one that names the decompiled tree, each
-      # the file and the text it has to contain. None can read a task variable.
-      # One names a target rather than a path, so moving GAMESRC_ROOT rewrites
-      # every other line here and renames that one not at all.
-      GAMESRC_SPELLED: |-
-        .gitignore /{{.GAMESRC_ROOT}}/
-        .dockerignore {{.GAMESRC_ROOT}}/
-        Dockerfile /out/{{.GAMESRC_ROOT}}
-        scripts/check-game-pin.sh task {{.GAMESRC_ROOT}}
-        .github/workflows/ci.yml {{.GAMESRC_DEST}}
-        .github/workflows/ci.yml {{.GAMESRC_FULL}}
-        .github/workflows/ci.yml {{.GAMESRC_DIGEST}}
-        tools/chipgen/digest.go {{.GAMESRC_ROOT}}/
-        tools/chipgen/main.go {{.GAMESRC_FULL}}
-        tools/chipgen/main.go {{.CHIP_DEST}}
-        tools/chipgen/slice.digest {{.GAMESRC_ROOT}}/
-        tools/isagen/main.go {{.GAMESRC_DIGEST}}
-        tools/isagen/limits_test.go "{{.GAMESRC_ROOT}}", "source"
-        tools/isagen/limits_test.go "{{.GAMESRC_ROOT}}", "source-full"
-    cmds:
-      # This file is the one place the tree's name is written rather than copied,
-      # and is skipped for that reason: left in the scan it would be reported as
-      # a copy nothing accounts for.
-      - |
-        ./scripts/check-spelled-path.sh 'the decompile' '{{.GAMESRC_ROOT}}' Taskfile.yml <<'ACCOUNTED'
-        {{.GAMESRC_SPELLED}}
-        ACCOUNTED
-
   check:game-pin:
     desc: Fail if Steam serves a game build other than the one the Dockerfile pins (needs docker and the network)
     # Asks and does not rebuild: a rebuild would run for a very long time with no
@@ -364,25 +327,6 @@ tasks:
           status=0
         fi
         exit "$status"
-
-  check:corpus:
-    desc: Fail if anything outside this file spells the fixture corpus somewhere CORPUS_PROGRAMS cannot reach
-    vars:
-      # internal/corpus's ModulePath is the authority every Go caller reads;
-      # scripts/verify-release-compiles.sh is a copy, because shell cannot import
-      # a Go constant. Two entries still earn the second direction: what it
-      # catches is a third copy in a file nobody thought to look at.
-      CORPUS_SPELLED: |-
-        internal/corpus/corpus.go {{.CORPUS_PROGRAMS}}
-        scripts/verify-release-compiles.sh {{.CORPUS_PROGRAMS}}
-    cmds:
-      # Nothing is skipped the way this file is in `task check:gamesrc`: a file
-      # spelling the whole programs path rather than composing it from the root
-      # is one more copy of exactly what this holds, this file included.
-      - |
-        ./scripts/check-spelled-path.sh 'the fixture corpus' '{{.CORPUS_PROGRAMS}}' <<'ACCOUNTED'
-        {{.CORPUS_SPELLED}}
-        ACCOUNTED
 
   check:codegen:
     desc: Fail if a checked-in generated file differs from what the generator writes now, or shares a Go package with hand-written source

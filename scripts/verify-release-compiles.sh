@@ -68,7 +68,7 @@ if [ -n "${manifest}" ]; then
 fi
 
 # The shell side's own copy of internal/corpus's ModulePath, since shell cannot
-# read a Go constant; `task check:corpus` is what holds the two together.
+# read a Go constant.
 corpus=internal/corpus/programs
 
 # Asked separately from the floor below, which cannot tell the two apart: under

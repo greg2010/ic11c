@@ -25,11 +25,11 @@ constexpr double kMinKelvin = 285.0;
 constexpr double kFouledCeiling = 0.05;
 
 // A console shows a raw number under mode 0, which is what a section count is.
-constexpr long long kModeDefault = 0;
+constexpr long kModeDefault = 0;
 
 double lowestPressure;
 
-long long habitable(double kelvin, double kilopascals, double oxygen) {
+long habitable(double kelvin, double kilopascals, double oxygen) {
     if (kelvin < kMinKelvin) {
         return 0;
     }
@@ -62,7 +62,7 @@ void main(void) {
         double co = __ic_load(core, RatioOxygen);
         double cc = __ic_load(core, RatioCarbonDioxide);
 
-        long long live = habitable(nt, np, no) + habitable(st, sp, so)
+        long live = habitable(nt, np, no) + habitable(st, sp, so)
                  + habitable(et, ep, eo) + habitable(wt, wp, wo)
                  + habitable(ct, cp, co);
 

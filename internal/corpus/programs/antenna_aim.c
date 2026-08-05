@@ -29,13 +29,13 @@ constexpr double kMinCosine = 0.05;
 constexpr double kHazeDepth = 0.0001;
 constexpr double kPanelExponent = 1.2;
 constexpr double kDecibelScale = 10.0;
-constexpr long long kModePercent = 1;
-constexpr long long kModeDefault = 0;
+constexpr long kModePercent = 1;
+constexpr long kModeDefault = 0;
 
 double heldBearing;
 
 void main(void) {
-    long long panels = __ic_hash("StructureSolarPanel");
+    long panels = __ic_hash("StructureSolarPanel");
 
     while (true) {
         double azimuth = __ic_load(sensor, SolarAngle) * deg2rad;

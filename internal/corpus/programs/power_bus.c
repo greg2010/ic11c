@@ -27,16 +27,16 @@ constexpr double kShedding = 0.10;
 
 // A console shows a fraction as a percentage under mode 1 and a raw number
 // under mode 0, so the ratio is published as a ratio and the console formats it.
-constexpr long long kModePercent = 1;
+constexpr long kModePercent = 1;
 
 double heldRatio;
-long long brownouts;
+long brownouts;
 
 void main(void) {
-    long long batteries = __ic_hash("StructureBattery");
-    long long analyzer = __ic_hash("StructureCableAnalysizer");
-    long long inputSide = __ic_hash("Power Input");
-    long long outputSide = __ic_hash("Power Output");
+    long batteries = __ic_hash("StructureBattery");
+    long analyzer = __ic_hash("StructureCableAnalysizer");
+    long inputSide = __ic_hash("Power Input");
+    long outputSide = __ic_hash("Power Output");
 
     while (true) {
         double stored = __ic_load_batch(batteries, Charge, Sum);

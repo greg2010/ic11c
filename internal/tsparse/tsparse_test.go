@@ -159,19 +159,52 @@ func TestRefusesWhatMicroCExcludes(t *testing.T) {
 			want: []string{"test.c:1:1: the 'char' type specifier is not supported in MicroC; a character literal is a long long"},
 		},
 		{
-			name: "long alone",
-			src:  "long a;\n",
-			want: []string{"test.c:1:1: MicroC's integer type is 'long long'; 'long' alone is 32 bits on some C implementations, which is narrower than the values this machine holds"},
-		},
-		{
 			name: "unsigned",
 			src:  "unsigned long long a;\n",
-			want: []string{"test.c:1:1: 'unsigned long long' is not a type in MicroC, whose types are bool, dev, double, long long, void; MicroC has no typedef, so nothing else becomes one"},
+			want: []string{"test.c:1:1: " + notAType("unsigned long long")},
 		},
 		{
 			name: "a name in type position",
 			src:  "widget *w;\n",
-			want: []string{"test.c:1:1: 'widget' is not a type in MicroC, whose types are bool, dev, double, long long, void; MicroC has no typedef, so nothing else becomes one"},
+			want: []string{"test.c:1:1: " + notAType("widget")},
+		},
+		// A word past a type the words in front of it already spell is a stray
+		// declarator where it repeats one of them, and a C type MicroC does not
+		// have where it does not.
+		{
+			name: "long double",
+			src:  "long double a;\n",
+			want: []string{"test.c:1:1: " + notAType("long double")},
+		},
+		{
+			name: "long long double",
+			src:  "long long double a;\n",
+			want: []string{"test.c:1:1: " + notAType("long long double")},
+		},
+		{
+			name: "long unsigned",
+			src:  "long unsigned a;\n",
+			want: []string{"test.c:1:1: " + notAType("long unsigned")},
+		},
+		{
+			name: "long signed",
+			src:  "long signed a;\n",
+			want: []string{"test.c:1:1: " + notAType("long signed")},
+		},
+		{
+			name: "unsigned long",
+			src:  "unsigned long a;\n",
+			want: []string{"test.c:1:1: " + notAType("unsigned long")},
+		},
+		{
+			name: "signed long",
+			src:  "signed long a;\n",
+			want: []string{"test.c:1:1: " + notAType("signed long")},
+		},
+		{
+			name: "int long",
+			src:  "int long a;\n",
+			want: []string{"test.c:1:1: " + notAType("int long")},
 		},
 		// A name the grammar took into a type is not part of a type name, and
 		// quoting the words around it offers a spelling nothing in the language
@@ -187,9 +220,9 @@ func TestRefusesWhatMicroCExcludes(t *testing.T) {
 			want: []string{"test.c:1:1: expected a type, found 'widget'"},
 		},
 		{
-			name: "a name behind type words that spell no type",
+			name: "a name behind the short spelling",
 			src:  "long a b = 1;\n",
-			want: []string{"test.c:1:1: MicroC's integer type is 'long long'; 'long' alone is 32 bits on some C implementations, which is narrower than the values this machine holds"},
+			want: []string{"test.c:1:7: expected ';', found 'b'"},
 		},
 		{
 			// The declarator's name belonged where the third word stands, and
@@ -204,6 +237,13 @@ func TestRefusesWhatMicroCExcludes(t *testing.T) {
 			name: "trailing int",
 			src:  "long long int a;\n",
 			want: []string{"test.c:1:11: MicroC writes the integer type as 'long long', without the trailing 'int'"},
+		},
+		{
+			// The sentence quotes the spelling that was written rather than the
+			// canonical one, since the word to delete is all that is wrong.
+			name: "trailing int on the short spelling",
+			src:  "long int a;\n",
+			want: []string{"test.c:1:6: MicroC writes the integer type as 'long', without the trailing 'int'"},
 		},
 		{
 			// At the ',' joining the second name to the first, which is the
@@ -586,7 +626,7 @@ func TestBrokenSourceStillYieldsAFile(t *testing.T) {
 		},
 		{
 			src:  "void f(long long x) { if (x) long long a[if (x) long long b = 1;] = {0}; }",
-			want: []string{"test.c:1:30: expected a statement, found 'long'", "test.c:1:54: MicroC's integer type is 'long long'; 'long' alone is 32 bits on some C implementations, which is narrower than the values this machine holds", "test.c:1:65: expected a statement, found ']'", "test.c:1:70: expected a statement, found an integer literal"},
+			want: []string{"test.c:1:30: expected a statement, found 'long'", "test.c:1:65: expected a statement, found ']'", "test.c:1:70: expected a statement, found an integer literal"},
 		},
 		{
 			// The declaration written as the body runs into the '}' that closes

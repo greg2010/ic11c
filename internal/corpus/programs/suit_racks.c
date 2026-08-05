@@ -18,13 +18,13 @@
 const dev hazard = d0;
 const dev display = d1;
 
-constexpr long long kHelmet = 0;
+constexpr long kHelmet = 0;
 constexpr double kServiceDamage = 0.25;
 
-long long served;
+long served;
 
 void main(void) {
-    long long racks = __ic_hash("StructureSuitStorage");
+    long racks = __ic_hash("StructureSuitStorage");
 
     while (true) {
         bool alarm = __ic_load(hazard, Activate) != 0;

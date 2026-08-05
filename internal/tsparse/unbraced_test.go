@@ -14,20 +14,33 @@ import (
 func TestEveryTypeOpensAnUnbracedBody(t *testing.T) {
 	for _, kind := range ast.ScalarKinds() {
 		t.Run(kind.String(), func(t *testing.T) {
-			src := fmt.Sprintf("void f(long long x) { if (x) %s a; }\n", kind)
-			marks := newConverter("t.c", src).unbracedBodies()
-			if len(marks) != 2 {
-				t.Fatalf("%q needs one brace pair around the body, got %d marks", src, len(marks))
-			}
-			if got, want := marks[0].ch, byte('{'); got != want {
-				t.Errorf("first mark is %q, want %q", got, want)
-			}
-			if got, want := marks[1].ch, byte('}'); got != want {
-				t.Errorf("second mark is %q, want %q", got, want)
-			}
-			if got, want := src[marks[0].at:marks[1].at], kind.String()+" a;"; got != want {
-				t.Errorf("the braces enclose %q, want %q", got, want)
-			}
+			checkBracesAreWrittenAround(t, kind.String())
 		})
+	}
+}
+
+func TestEveryAliasOpensAnUnbracedBody(t *testing.T) {
+	for spelling := range scalarTypeAliases {
+		t.Run(spelling, func(t *testing.T) {
+			checkBracesAreWrittenAround(t, spelling)
+		})
+	}
+}
+
+func checkBracesAreWrittenAround(t *testing.T, spelling string) {
+	t.Helper()
+	src := fmt.Sprintf("void f(long long x) { if (x) %s a; }\n", spelling)
+	marks := newConverter("t.c", src).unbracedBodies()
+	if len(marks) != 2 {
+		t.Fatalf("%q needs one brace pair around the body, got %d marks", src, len(marks))
+	}
+	if got, want := marks[0].ch, byte('{'); got != want {
+		t.Errorf("first mark is %q, want %q", got, want)
+	}
+	if got, want := marks[1].ch, byte('}'); got != want {
+		t.Errorf("second mark is %q, want %q", got, want)
+	}
+	if got, want := src[marks[0].at:marks[1].at], spelling+" a;"; got != want {
+		t.Errorf("the braces enclose %q, want %q", got, want)
 	}
 }

@@ -32,20 +32,20 @@ const dev memory = d4;
 
 // A console shows a raw number under mode 0. The alloy hash is a number and not
 // a fraction, so it is the mode this program leaves the console in.
-constexpr long long kModeDefault = 0;
+constexpr long kModeDefault = 0;
 
-constexpr long long kRows = 11;
-constexpr long long kCols = 7;
+constexpr long kRows = 11;
+constexpr long kCols = 7;
 
-constexpr long long kAlloy = 0;
-constexpr long long kOreA = 1;
-constexpr long long kQtyA = 2;
-constexpr long long kOreB = 3;
-constexpr long long kQtyB = 4;
-constexpr long long kOreC = 5;
-constexpr long long kQtyC = 6;
+constexpr long kAlloy = 0;
+constexpr long kOreA = 1;
+constexpr long kQtyA = 2;
+constexpr long kOreB = 3;
+constexpr long kQtyB = 4;
+constexpr long kOreC = 5;
+constexpr long kQtyC = 6;
 
-constexpr long long kRecipes[kRows * kCols] = {
+constexpr long kRecipes[kRows * kCols] = {
     -404336834, -707307845, 1, 0, 0, 0, 0,
     226410516, -1348105509, 1, 0, 0, 0, 0,
     -1301215609, 1758427767, 1, 0, 0, 0, 0,
@@ -59,10 +59,10 @@ constexpr long long kRecipes[kRows * kCols] = {
     -1897868623, -916518678, 1, 1103972403, 2, -983091249, 1,
 };
 
-long long lastRow = -1;
+long lastRow = -1;
 
-long long findRow(long long alloy) {
-    for (long long r = 0; r < kRows; r++) {
+long findRow(long alloy) {
+    for (long r = 0; r < kRows; r++) {
         if (kRecipes[r * kCols + kAlloy] == alloy) {
             return r;
         }
@@ -70,7 +70,7 @@ long long findRow(long long alloy) {
     return -1;
 }
 
-long long ingots(long long row) {
+long ingots(long row) {
     return kRecipes[row * kCols + kQtyA]
          + kRecipes[row * kCols + kQtyB]
          + kRecipes[row * kCols + kQtyC];
@@ -78,8 +78,8 @@ long long ingots(long long row) {
 
 void main(void) {
     while (true) {
-        long long wanted = (long long)__ic_load(selector, Setting);
-        long long row = findRow(wanted);
+        long wanted = (long)__ic_load(selector, Setting);
+        long row = findRow(wanted);
 
         if (row < 0) {
             __ic_store(vender, Activate, false);
