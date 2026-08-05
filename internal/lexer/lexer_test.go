@@ -1,6 +1,7 @@
 package lexer_test
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -121,6 +122,28 @@ func TestTokenSequences(t *testing.T) {
 			},
 		},
 		{
+			name: "reserved keywords scan as one kind carrying the spelling",
+			src:  "nullptr alignas _Atomic typeof _BitInt",
+			want: []want{
+				{kind: lexer.Reserved, text: "nullptr"},
+				{kind: lexer.Reserved, text: "alignas"},
+				{kind: lexer.Reserved, text: "_Atomic"},
+				{kind: lexer.Reserved, text: "typeof"},
+				{kind: lexer.Reserved, text: "_BitInt"},
+			},
+		},
+		{
+			name: "words C leaves alone are identifiers",
+			src:  "asm offsetof noreturn NULL __attribute__",
+			want: []want{
+				{kind: lexer.Ident, text: "asm"},
+				{kind: lexer.Ident, text: "offsetof"},
+				{kind: lexer.Ident, text: "noreturn"},
+				{kind: lexer.Ident, text: "NULL"},
+				{kind: lexer.Ident, text: "__attribute__"},
+			},
+		},
+		{
 			name: "identifiers",
 			src:  "x _y a1 __ic_load Temperature d0",
 			want: []want{
@@ -164,13 +187,29 @@ func TestTokenSequences(t *testing.T) {
 		},
 		{
 			name: "punctuation",
-			src:  "( ) [ ] { } , ; : ? . -> ... ++ --",
+			src:  "( ) [ ] { } , ; : :: ? . -> ... ++ --",
 			want: []want{
 				{kind: lexer.Lparen}, {kind: lexer.Rparen}, {kind: lexer.Lbrack},
 				{kind: lexer.Rbrack}, {kind: lexer.Lbrace}, {kind: lexer.Rbrace},
 				{kind: lexer.Comma}, {kind: lexer.Semicolon}, {kind: lexer.Colon},
-				{kind: lexer.Question}, {kind: lexer.Period}, {kind: lexer.Arrow},
-				{kind: lexer.Ellipsis}, {kind: lexer.Inc}, {kind: lexer.Dec},
+				{kind: lexer.Scope}, {kind: lexer.Question}, {kind: lexer.Period},
+				{kind: lexer.Arrow}, {kind: lexer.Ellipsis}, {kind: lexer.Inc},
+				{kind: lexer.Dec},
+			},
+		},
+		{
+			// The attribute specifier, which is the one construct either
+			// spelling appears in. C23 spells its brackets as two tokens and
+			// its separator as one, and a scan that took ':' twice would admit
+			// ': :' where C admits nothing.
+			name: "an attribute specifier",
+			src:  `[[ic11c::prefab("StructureGasSensor")]]`,
+			want: []want{
+				{kind: lexer.Lbrack}, {kind: lexer.Lbrack},
+				{kind: lexer.Ident, text: "ic11c"}, {kind: lexer.Scope},
+				{kind: lexer.Ident, text: "prefab"}, {kind: lexer.Lparen},
+				{kind: lexer.StringLit, s: "StructureGasSensor"},
+				{kind: lexer.Rparen}, {kind: lexer.Rbrack}, {kind: lexer.Rbrack},
 			},
 		},
 		{
@@ -280,6 +319,14 @@ func TestLiteralValues(t *testing.T) {
 			src:  "9223372036854775807",
 			want: []want{{kind: lexer.IntLit, i: 9223372036854775807}},
 		},
+		{
+			// The hexadecimal path parses into a uint64 and narrows, so its
+			// boundary is one the lexer draws rather than one the parse
+			// reports, and it is a different boundary from the row above.
+			name: "largest signed sixty-four bit in hexadecimal",
+			src:  "0x7FFFFFFFFFFFFFFF",
+			want: []want{{kind: lexer.IntLit, i: 9223372036854775807}},
+		},
 		{name: "char plain", src: `'a'`, want: []want{{kind: lexer.CharLit, text: `'a'`, i: 'a'}}},
 		{name: "char digit", src: `'0'`, want: []want{{kind: lexer.CharLit, text: `'0'`, i: '0'}}},
 		{name: "char newline escape", src: `'\n'`, want: []want{{kind: lexer.CharLit, text: `'\n'`, i: 10}}},
@@ -298,6 +345,14 @@ func TestLiteralValues(t *testing.T) {
 		{name: "char hex escape", src: `'\x41'`, want: []want{{kind: lexer.CharLit, i: 'A'}}},
 		{name: "char one digit hex escape", src: `'\x7'`, want: []want{{kind: lexer.CharLit, i: 7}}},
 		{name: "char highest ascii", src: `'\x7f'`, want: []want{{kind: lexer.CharLit, i: 0x7f}}},
+		// The rune branch of scanCharValue rather than an escape, and the last
+		// code point it admits. The one above it is in TestMalformedInput.
+		{name: "char highest ascii written literally", src: "'\x7f'", want: []want{{kind: lexer.CharLit, i: 0x7f}}},
+		// A numeric escape names a byte, not a code point, so the range runs to
+		// 0xff and the value above 0x7f is the one a mask would quietly change.
+		{name: "char hex escape above ascii", src: `'\xff'`, want: []want{{kind: lexer.CharLit, i: 0xff}}},
+		{name: "char hex escape at the top of the range", src: `'\x80'`, want: []want{{kind: lexer.CharLit, i: 0x80}}},
+		{name: "char octal escape above ascii", src: `'\377'`, want: []want{{kind: lexer.CharLit, i: 0xff}}},
 		{
 			name: "string plain",
 			src:  `"StructureWallLight"`,
@@ -313,6 +368,25 @@ func TestLiteralValues(t *testing.T) {
 			name: "string with hex escape",
 			src:  `"\x41\x42"`,
 			want: []want{{kind: lexer.StringLit, s: "AB"}},
+		},
+		// A string literal reaches the compiler only as a __ic_hash argument, so
+		// a byte the escape decoded and the builder then changed is a different
+		// hash and nothing else. These three sit above 0x7f, where a byte
+		// written through a rune-shaped path would lose its top bit.
+		{
+			name: "string with a hex escape above ascii",
+			src:  `"\xff"`,
+			want: []want{{kind: lexer.StringLit, s: "\xff"}},
+		},
+		{
+			name: "string with a hex escape at the top of the range",
+			src:  `"\x80"`,
+			want: []want{{kind: lexer.StringLit, s: "\x80"}},
+		},
+		{
+			name: "string with an octal escape above ascii",
+			src:  `"\377"`,
+			want: []want{{kind: lexer.StringLit, s: "\xff"}},
 		},
 		{
 			name: "string keeps multi-byte runes",
@@ -539,6 +613,21 @@ func TestMalformedInput(t *testing.T) {
 			wantKinds: []lexer.Kind{lexer.Ident},
 		},
 		{
+			// The star is the last byte, so the scan asks whether a slash
+			// follows it with nothing there to read. It is the one input that
+			// reaches past the end of the source.
+			name:      "unterminated block comment ending in a star",
+			src:       "a /* b *",
+			want:      []at{{msg: "unterminated block comment", line: 1, col: 3}},
+			wantKinds: []lexer.Kind{lexer.Ident},
+		},
+		{
+			name:      "unterminated block comment ending in a slash",
+			src:       "a /* b /",
+			want:      []at{{msg: "unterminated block comment", line: 1, col: 3}},
+			wantKinds: []lexer.Kind{lexer.Ident},
+		},
+		{
 			name:      "unterminated string",
 			src:       "\"abc\nx",
 			want:      []at{{msg: "unterminated string literal", line: 1, col: 1}},
@@ -551,9 +640,41 @@ func TestMalformedInput(t *testing.T) {
 			wantKinds: []lexer.Kind{lexer.CharLit, lexer.Ident},
 		},
 		{
+			// The escape has no character to name, and the newline that ended
+			// the line is not it. Consuming it here would leave the line
+			// counter one short for the rest of the file, which the '@' on the
+			// second line is what says: it is reported at 2:3 or nowhere.
+			name: "a backslash at the end of a line in a character literal",
+			src:  "'\\\nx @",
+			want: []at{
+				{msg: "unterminated escape sequence", line: 1, col: 2},
+				{msg: "unterminated character literal", line: 1, col: 1},
+				{msg: "unexpected character '@'", line: 2, col: 3},
+			},
+			wantKinds: []lexer.Kind{lexer.CharLit, lexer.Ident},
+		},
+		{
+			name: "a backslash at the end of the source in a character literal",
+			src:  "'\\",
+			want: []at{
+				{msg: "unterminated escape sequence", line: 1, col: 2},
+				{msg: "unterminated character literal", line: 1, col: 1},
+			},
+			wantKinds: []lexer.Kind{lexer.CharLit},
+		},
+		{
 			name:      "empty character literal",
 			src:       "''",
 			want:      []at{{msg: "empty character literal", line: 1, col: 1}},
+			wantKinds: []lexer.Kind{lexer.CharLit},
+		},
+		{
+			// The first code point that is not ASCII. Every other row here sits
+			// well above it, so this is the one that says where the line is
+			// drawn rather than that one exists.
+			name:      "the code point just past ascii in a character literal",
+			src:       "'\u0080'",
+			want:      []at{{msg: "a character literal holds one ASCII character", line: 1, col: 2}},
 			wantKinds: []lexer.Kind{lexer.CharLit},
 		},
 		{
@@ -605,6 +726,50 @@ func TestMalformedInput(t *testing.T) {
 			wantKinds: []lexer.Kind{lexer.CharLit},
 		},
 		{
+			// C stops an octal escape after three digits. A fourth is a
+			// character of its own, which is what makes this literal hold two.
+			name:      "an octal escape stops after three digits",
+			src:       `'\0000'`,
+			want:      []at{{msg: "more than one character", line: 1, col: 1}},
+			wantKinds: []lexer.Kind{lexer.CharLit},
+		},
+		{
+			name:      "a fourth octal digit that would carry the escape out of range",
+			src:       `'\1000'`,
+			want:      []at{{msg: "more than one character", line: 1, col: 1}},
+			wantKinds: []lexer.Kind{lexer.CharLit},
+		},
+		{
+			// Eight and nine end an octal escape rather than extending it, so
+			// this literal holds the escape and then the digit.
+			name:      "an octal escape stops before an eight",
+			src:       `'\08'`,
+			want:      []at{{msg: "more than one character", line: 1, col: 1}},
+			wantKinds: []lexer.Kind{lexer.CharLit},
+		},
+		{
+			name:      "an octal escape stops before a nine",
+			src:       `'\79'`,
+			want:      []at{{msg: "more than one character", line: 1, col: 1}},
+			wantKinds: []lexer.Kind{lexer.CharLit},
+		},
+		{
+			// The letter just past the hexadecimal digits. Taking it as one
+			// would carry it into the parse rather than leaving it as the
+			// suffix it is, and the message and the place it points at are what
+			// say which of the two happened.
+			name:      "a letter past the hexadecimal digits is a suffix",
+			src:       "0xfg",
+			want:      []at{{msg: `invalid suffix "g" on integer literal`, line: 1, col: 4}},
+			wantKinds: []lexer.Kind{lexer.IntLit},
+		},
+		{
+			name:      "a letter past the digits of a hexadecimal escape",
+			src:       `'\xfg'`,
+			want:      []at{{msg: "more than one character", line: 1, col: 1}},
+			wantKinds: []lexer.Kind{lexer.CharLit},
+		},
+		{
 			name:      "hex literal without digits",
 			src:       "0x",
 			want:      []at{{msg: "hexadecimal literal has no digits", line: 1, col: 1}},
@@ -629,6 +794,23 @@ func TestMalformedInput(t *testing.T) {
 			wantKinds: []lexer.Kind{lexer.IntLit},
 		},
 		{
+			// The shortest spelling C reads as octal. A leading zero and one
+			// digit is where the rule starts, and '0' alone is the digit before
+			// it, which TestLiteralValues holds to no diagnostic at all.
+			name:      "two digit octal literal rejected",
+			src:       "07",
+			want:      []at{{msg: "octal literals are not supported", line: 1, col: 1}},
+			wantKinds: []lexer.Kind{lexer.IntLit},
+		},
+		{
+			// C refuses this outright: there is no octal digit 8. Reading it as
+			// decimal 8 would give the program a value clang never compiles.
+			name:      "a leading zero on a digit no octal literal holds",
+			src:       "08",
+			want:      []at{{msg: "octal literals are not supported", line: 1, col: 1}},
+			wantKinds: []lexer.Kind{lexer.IntLit},
+		},
+		{
 			name:      "integer suffix rejected",
 			src:       "12u",
 			want:      []at{{msg: `invalid suffix "u" on integer literal`, line: 1, col: 3}},
@@ -645,6 +827,33 @@ func TestMalformedInput(t *testing.T) {
 			src:       "1.5f",
 			want:      []at{{msg: `invalid suffix "f" on floating-point literal`, line: 1, col: 4}},
 			wantKinds: []lexer.Kind{lexer.FloatLit},
+		},
+		{
+			// An 'e' with no digit after it is a suffix, not an exponent.
+			// Reading it as one leaves a literal ParseFloat refuses, which
+			// answers zero and says nothing.
+			name:      "an exponent with no digits",
+			src:       "1e;",
+			want:      []at{{msg: `invalid suffix "e" on integer literal`, line: 1, col: 2}},
+			wantKinds: []lexer.Kind{lexer.IntLit, lexer.Semicolon},
+		},
+		{
+			name:      "an exponent whose sign is followed by no digits",
+			src:       "1e+;",
+			want:      []at{{msg: `invalid suffix "e" on integer literal`, line: 1, col: 2}},
+			wantKinds: []lexer.Kind{lexer.IntLit, lexer.Add, lexer.Semicolon},
+		},
+		{
+			name:      "an exponent at the end of the source",
+			src:       "1e",
+			want:      []at{{msg: `invalid suffix "e" on integer literal`, line: 1, col: 2}},
+			wantKinds: []lexer.Kind{lexer.IntLit},
+		},
+		{
+			name:      "an exponent whose sign ends the source",
+			src:       "1e+",
+			want:      []at{{msg: `invalid suffix "e" on integer literal`, line: 1, col: 2}},
+			wantKinds: []lexer.Kind{lexer.IntLit, lexer.Add},
 		},
 		{
 			name:      "floating point literal past the range of a double",
@@ -717,10 +926,6 @@ func kindList(ks []lexer.Kind) string {
 }
 
 // TestFloatingPointLiterals covers the forms a double literal takes.
-//
-// Exponent notation is admitted even though the chip's own number parser has
-// none: the emitter always writes a decimal expansion, so what the source may
-// spell and what a line may hold are separate questions.
 func TestFloatingPointLiterals(t *testing.T) {
 	tests := []struct {
 		name string
@@ -849,6 +1054,12 @@ func TestKindString(t *testing.T) {
 		{lexer.Int, "'int'"},
 		{lexer.True, "'true'"},
 		{lexer.Struct, "'struct'"},
+		// The last kind the table names, and the first one past it. A kind with
+		// no name has to render as something a reader recognizes as missing,
+		// which is what TestEveryKindIsNamed detects a gap by.
+		{lexer.Ellipsis, "'...'"},
+		{lexer.Ellipsis + 1, "token(" + strconv.Itoa(int(lexer.Ellipsis)+1) + ")"},
+		{lexer.Kind(200), "token(200)"},
 	}
 	for _, tt := range tests {
 		if got := tt.kind.String(); got != tt.want {
@@ -857,10 +1068,169 @@ func TestKindString(t *testing.T) {
 	}
 }
 
+// TestTokenDescribe covers how a diagnostic names a token it is pointing
+// at. An identifier and a reserved word answer with their spelling — the
+// programmer recognizes the word, not the category — and every other kind
+// answers with its kind's name even though it carries a spelling too.
+func TestTokenDescribe(t *testing.T) {
+	tests := []struct {
+		name string
+		tok  lexer.Token
+		want string
+	}{
+		{
+			name: "an identifier is named by its spelling",
+			tok:  lexer.Token{Kind: lexer.Ident, Text: "pressure"},
+			want: "'pressure'",
+		},
+		{
+			name: "a reserved word is named by its spelling",
+			tok:  lexer.Token{Kind: lexer.Reserved, Text: "nullptr"},
+			want: "'nullptr'",
+		},
+		{
+			name: "a keyword is named by its kind",
+			tok:  lexer.Token{Kind: lexer.While, Text: "while"},
+			want: "'while'",
+		},
+		{
+			name: "an operator is named by its kind",
+			tok:  lexer.Token{Kind: lexer.ShlAssign, Text: "<<="},
+			want: "'<<='",
+		},
+		{
+			name: "a literal is named by its kind and not by what it spells",
+			tok:  lexer.Token{Kind: lexer.IntLit, Text: "42"},
+			want: "an integer literal",
+		},
+		{
+			name: "end of file has no spelling to be named by",
+			tok:  lexer.Token{Kind: lexer.EOF},
+			want: "end of file",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.tok.Describe(); got != tt.want {
+				t.Errorf("Describe() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEveryKindIsNamed(t *testing.T) {
 	for k := lexer.EOF; k <= lexer.Ellipsis; k++ {
 		if s := k.String(); strings.HasPrefix(s, "token(") {
 			t.Errorf("kind %d has no name", k)
 		}
+	}
+}
+
+// c23Keywords is the full ISO/IEC 9899:2024 §6.4.1 keyword list, written
+// out rather than derived from the table it checks, so a program using
+// any of these names is not the C23 translation unit every MicroC
+// program must be.
+var c23Keywords = []struct {
+	word string
+	kind lexer.Kind
+}{
+	{"alignas", lexer.Reserved},
+	{"alignof", lexer.Reserved},
+	{"auto", lexer.Auto},
+	{"bool", lexer.Bool},
+	{"break", lexer.Break},
+	{"case", lexer.Case},
+	{"char", lexer.Char},
+	{"const", lexer.Const},
+	{"constexpr", lexer.Constexpr},
+	{"continue", lexer.Continue},
+	{"default", lexer.Default},
+	{"do", lexer.Do},
+	{"double", lexer.Double},
+	{"else", lexer.Else},
+	{"enum", lexer.Enum},
+	{"extern", lexer.Extern},
+	{"false", lexer.False},
+	{"float", lexer.Float},
+	{"for", lexer.For},
+	{"goto", lexer.Goto},
+	{"if", lexer.If},
+	{"inline", lexer.Inline},
+	{"int", lexer.Int},
+	{"long", lexer.Long},
+	{"nullptr", lexer.Reserved},
+	{"register", lexer.Register},
+	{"restrict", lexer.Restrict},
+	{"return", lexer.Return},
+	{"short", lexer.Short},
+	{"signed", lexer.Signed},
+	{"sizeof", lexer.Sizeof},
+	{"static", lexer.Static},
+	{"static_assert", lexer.Reserved},
+	{"struct", lexer.Struct},
+	{"switch", lexer.Switch},
+	{"thread_local", lexer.Reserved},
+	{"true", lexer.True},
+	{"typedef", lexer.Typedef},
+	{"typeof", lexer.Reserved},
+	{"typeof_unqual", lexer.Reserved},
+	{"union", lexer.Union},
+	{"unsigned", lexer.Unsigned},
+	{"void", lexer.Void},
+	{"volatile", lexer.Volatile},
+	{"while", lexer.While},
+	{"_Alignas", lexer.Reserved},
+	{"_Alignof", lexer.Reserved},
+	{"_Atomic", lexer.Reserved},
+	{"_BitInt", lexer.Reserved},
+	{"_Bool", lexer.Reserved},
+	{"_Complex", lexer.Reserved},
+	{"_Decimal128", lexer.Reserved},
+	{"_Decimal32", lexer.Reserved},
+	{"_Decimal64", lexer.Reserved},
+	{"_Generic", lexer.Reserved},
+	{"_Imaginary", lexer.Reserved},
+	{"_Noreturn", lexer.Reserved},
+	{"_Static_assert", lexer.Reserved},
+	{"_Thread_local", lexer.Reserved},
+}
+
+func TestEveryC23KeywordIsReserved(t *testing.T) {
+	for _, tt := range c23Keywords {
+		t.Run(tt.word, func(t *testing.T) {
+			l := lexer.New("test.c", tt.word)
+			tok := l.Next()
+			if tok.Kind != tt.kind {
+				t.Errorf("%q scans as %v, want %v", tt.word, tok.Kind, tt.kind)
+			}
+			if tok.Text != tt.word {
+				t.Errorf("scanned %q, want the whole word", tok.Text)
+			}
+			if diags := l.Diagnostics(); len(diags) != 0 {
+				t.Errorf("%q does not scan cleanly:\n%s", tt.word, diags)
+			}
+		})
+	}
+}
+
+// TestNoWordOutsideC23IsReserved is the other half. A word C23 leaves alone may
+// name a variable, so reserving one would refuse a program the language admits.
+func TestNoWordOutsideC23IsReserved(t *testing.T) {
+	// Compiler extensions, a library macro, an attribute and a macro, then the
+	// near misses: a word one edit from a keyword is what a table written by
+	// hand gets wrong, and a scanner matching a prefix rather than the whole
+	// word would take every one of them.
+	outside := []string{
+		"asm", "offsetof", "noreturn", "NULL", "__attribute__", "__asm__", "__restrict",
+		"_Decimal16", "_Decimal", "_BitIn", "_BitInts", "_bool", "_Boolean",
+		"typeof_qual", "typeof_unqualified", "alignat", "nullptrs", "static_asserts",
+		"thread_locale", "constexp", "constexprs", "Bool", "Alignas",
+	}
+	for _, word := range outside {
+		t.Run(word, func(t *testing.T) {
+			if tok := lexer.New("test.c", word).Next(); tok.Kind != lexer.Ident {
+				t.Errorf("%q scans as %v, and C23 reserves no such word", word, tok.Kind)
+			}
+		})
 	}
 }

@@ -1,8 +1,7 @@
 // Package lexer turns MicroC source text into tokens.
 //
-// Scanning never stops at the first malformed construct. The offending bytes
-// are consumed, a diagnostic is recorded, and scanning continues, so one bad
-// token does not hide the rest of the file.
+// Scanning never stops at the first malformed construct — the bytes are
+// consumed, a diagnostic recorded, and scanning continues.
 package lexer
 
 import (
@@ -31,11 +30,9 @@ func New(file, src string) *Lexer {
 	return &Lexer{file: file, src: src, line: 1}
 }
 
-// Next returns the next token, skipping whitespace and comments. Once the
-// source is exhausted it returns an EOF token indefinitely.
-//
-// Next never fails. Malformed input produces a diagnostic and a best-effort
-// token, or is skipped entirely when nothing sensible can be produced.
+// Next returns the next token, skipping whitespace and comments, and returns
+// EOF indefinitely once the source is exhausted. It never fails: malformed
+// input yields a diagnostic and a best-effort token, or is skipped.
 func (l *Lexer) Next() Token {
 	for {
 		l.skipSpaceAndComments()
@@ -230,10 +227,9 @@ func (l *Lexer) exponentDigits(off int) (int, bool) {
 }
 
 // scanFloat consumes a floating-point literal, which has type double.
-//
-// Exponent notation is admitted even though the chip's own number parser has
-// none: the emitter always writes a decimal expansion, so what the source may
-// spell and what a line may hold are separate questions.
+// Exponent notation is admitted even though the chip's own number parser
+// has none: the emitter always writes a decimal expansion, so source
+// spelling and emitted spelling are separate questions.
 func (l *Lexer) scanFloat(start int) Token {
 	if l.off < len(l.src) && l.src[l.off] == '.' {
 		l.off++
@@ -330,14 +326,9 @@ func (l *Lexer) scanString() Token {
 }
 
 // scanCharValue consumes one character or escape sequence and returns its
-// value. It always consumes at least one byte, so the callers' loops progress.
-// A numeric escape above 0xFF, which is more than a string literal holds in one
-// byte, is rejected rather than truncated: it is reported and yields zero.
-//
-// A character written literally must be ASCII. Only a character literal reaches
-// that branch — a string literal copies its runes as UTF-8 bytes without coming
-// through here — and C has no value to give a wider one: the code point does not
-// fit the type a character literal has there.
+// value, always consuming at least one byte so callers' loops progress.
+// A literal character must be ASCII; a string literal copies runes as
+// UTF-8 without reaching this branch.
 func (l *Lexer) scanCharValue() int64 {
 	if l.src[l.off] != '\\' {
 		start := l.off

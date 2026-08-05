@@ -1,6 +1,10 @@
 package sema
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/greg2010/ic11c/internal/source"
+)
 
 // Kind classifies a MicroC type.
 type Kind uint8
@@ -40,20 +44,12 @@ var kindNames = [...]string{
 	Array:   "array",
 }
 
-func (k Kind) String() string {
-	if int(k) < len(kindNames) && kindNames[k] != "" {
-		return kindNames[k]
-	}
-	return "Kind(" + strconv.Itoa(int(k)) + ")"
-}
+func (k Kind) String() string { return source.EnumName(kindNames[:], int(k), "Kind") }
 
-// Type is a MicroC type. A Type is immutable once built and is compared with
-// [Type.Equal] rather than by pointer, since analysis builds the same type more
-// than once — a decayed array and a written pointer have no reason to share a
-// value.
-//
-// const is part of the type, because "const long long *p" qualifies the pointee while
-// leaving p assignable, and only the type can carry that difference.
+// Type is a MicroC type. It is immutable once built and compared with
+// [Type.Equal] rather than by pointer, since analysis builds the same type
+// more than once. const is part of the type: "const long long *p" qualifies
+// the pointee while leaving p assignable, and only the type carries that.
 type Type struct {
 	kind  Kind
 	konst bool
@@ -255,18 +251,8 @@ func isArithmetic(t *Type) bool {
 	return false
 }
 
-// assignableTo reports whether a value of type src may initialize, be assigned
-// to, be passed as, or be returned as dst.
-//
-// long long and bool convert to each other, and both widen to double exactly: a
-// long long is exact to 2^53 and a bool is 0 or 1.
-//
-// Nothing narrows. A double reaches a long long or a bool only through a cast,
-// which is what makes the truncation visible at the line that wanted it —
-// silent truncation is the whole reason a fractional type had to exist.
-//
-// An array decays; a pointer keeps its pointee type and may only gain const; a
-// dev matches a dev alone.
+// assignableTo reports whether a value of type src may initialize, be
+// assigned to, be passed as, or be returned as dst.
 func assignableTo(dst, src *Type) bool {
 	d := unqual(dst)
 	s := unqual(decay(src))
@@ -284,13 +270,10 @@ func assignableTo(dst, src *Type) bool {
 	return false
 }
 
-// arithType gives the type a binary arithmetic or relational operator computes
-// in, and Invalid for an operand pair that does not meet.
-//
-// long long widens to double where the other operand is one. That is the one
-// place an operator converts anything, and it is admitted for the reason bool's
-// mixing is not: the widening is exact and loses nothing, so double is the type
-// both operands already have rather than one the program did not write.
+// arithType gives the type a binary arithmetic or relational operator
+// computes in, and Invalid for an operand pair that does not meet. long long
+// widens to double where the other operand is one — the one place an
+// operator converts anything — since the widening is exact and loses nothing.
 func arithType(lhs, rhs *Type) *Type {
 	l, r := unqual(decay(lhs)).Kind(), unqual(decay(rhs)).Kind()
 	switch {

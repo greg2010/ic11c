@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/greg2010/ic11c/internal/ast"
-	"github.com/greg2010/ic11c/internal/parser"
 	"github.com/greg2010/ic11c/internal/sema"
+	"github.com/greg2010/ic11c/internal/tsparse"
 )
 
 func TestAnalyzeBuildsCallGraph(t *testing.T) {
@@ -84,8 +84,8 @@ void main(void) {
 
 func TestAnalyzeResolvesIntrinsicOperands(t *testing.T) {
 	const src = `void main(void) {
-    __ic_store_slot(d3, 2, Occupied, __ic_hash("StructureFurnace"));
-    __ic_store_batch(__ic_hash("ItemWrench"), On, __ic_load(db, Pressure));
+    __ic_store_slot(d3, 2, Occupied, __ic_hash("StructureStubFurnace"));
+    __ic_store_batch(__ic_hash("StructureStubLight"), On, __ic_load(db, Pressure));
 }
 `
 	prog, diags := analyze(t, src)
@@ -113,7 +113,7 @@ func TestAnalyzeResolvesIntrinsicOperands(t *testing.T) {
 			// The hash of a prefab name is its CRC-32 read as a signed 32-bit
 			// integer, which is how the game publishes it.
 			intrinsic: "__ic_hash",
-			args:      []sema.Operand{{Kind: sema.OperandString, Name: "StructureFurnace", Value: 1947944864, Resolved: true}},
+			args:      []sema.Operand{{Kind: sema.OperandString, Name: "StructureStubFurnace", Value: 146307392, Resolved: true}},
 		},
 		{
 			intrinsic: "__ic_store_batch",
@@ -125,7 +125,7 @@ func TestAnalyzeResolvesIntrinsicOperands(t *testing.T) {
 		},
 		{
 			intrinsic: "__ic_hash",
-			args:      []sema.Operand{{Kind: sema.OperandString, Name: "ItemWrench", Value: -1886261558, Resolved: true}},
+			args:      []sema.Operand{{Kind: sema.OperandString, Name: "StructureStubLight", Value: 819625054, Resolved: true}},
 		},
 		{
 			intrinsic: "__ic_load",
@@ -230,7 +230,10 @@ void main(void) {
     }
 }
 `
-	file, parseDiags := parser.Parse("test.c", src)
+	file, parseDiags, err := tsparse.Parse("test.c", src)
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
 	if len(parseDiags) == 0 {
 		t.Fatal("the source was expected to fail parsing")
 	}
@@ -240,7 +243,10 @@ void main(void) {
 }
 
 func TestAnalyzeRejectsMisuse(t *testing.T) {
-	file, diags := parser.Parse("test.c", "void main(void) {}\n")
+	file, diags, err := tsparse.Parse("test.c", "void main(void) {}\n")
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
 	if len(diags) != 0 {
 		t.Fatalf("source did not parse cleanly:\n%s", diags.String())
 	}
@@ -254,7 +260,7 @@ func TestAnalyzeRejectsMisuse(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, _, err := sema.Analyze(ctx, file, testTables{})
+	_, _, err = sema.Analyze(ctx, file, testTables{})
 	if err == nil {
 		t.Fatal("Analyze ignored a cancelled context")
 	}

@@ -1,24 +1,11 @@
 package sema
 
-import (
-	"hash/crc32"
-	"strings"
-)
+import "hash/crc32"
 
-// Tables resolves the machine names an intrinsic argument may write. Logic
-// types, slot types, batch modes, and reagent modes are ordinary identifiers to
-// the grammar and carry meaning only in an intrinsic argument position; their
-// spellings and encodings come from tables generated from the game's own
-// assembly.
-//
-// Analysis depends on the interface rather than on the generated package so
-// that type checking is not a compile-time dependency of the tables, and so a
-// test can supply the handful of names it needs. Every method reports false for
-// a name the tables do not hold, which analysis turns into a diagnostic naming
-// the category.
-//
-// Device pins are not here: the language fixes them at db and d0 through d5,
-// which is a property of the housing rather than of a generated table.
+// Tables resolves the machine names an intrinsic argument may write: logic
+// types, slot types, batch modes, and reagent modes, generated from the
+// game's own assembly ([Shipped] is the production implementation). Device
+// pins are not here; see device.go.
 type Tables interface {
 	// LogicType resolves a logic type name such as "Pressure".
 	LogicType(name string) (Member, bool)
@@ -30,49 +17,67 @@ type Tables interface {
 	// ReagentMode resolves a reagent mode name: Contents, Required, Recipe, or
 	// TotalContents.
 	ReagentMode(name string) (Member, bool)
+
+	// Prefab resolves what a batch instruction's prefab hash names. A false
+	// answer means this game build ships nothing under that number, which is
+	// the strongest statement available about a hash: the batch forms report
+	// nothing for one that matches no device, they simply reach none.
+	Prefab(hash int32) (Prefab, bool)
+	// PrefabNamed resolves what a __ic_hash argument names, case-sensitively,
+	// as the hash is.
+	PrefabNamed(name string) (Prefab, bool)
 }
 
-// Member is one resolved machine name.
-//
-// Deprecated is carried because the game marks 23 of the 358 logic types
-// retired while still resolving every one of them. Nothing about the emitted
-// program changes, so it is the programmer rather than the compiler that has to
-// act on it.
+// Direction is which way a batch instruction touches a device property: the
+// load forms read and the store forms write.
+type Direction uint8
+
+const (
+	Reading Direction = iota
+	Writing
+)
+
+// Prefab is what one game build says a completed device of one kind answers
+// for: the thing a batch instruction's prefab hash names.
+type Prefab interface {
+	// Name is the prefab's own name, which is what a program hashes.
+	Name() string
+	// Title is the English name the game shows, empty for the few things the
+	// game ships no title for. It is a reading aid for a diagnostic: a roster
+	// name is not what the device is called in the game.
+	Title() string
+	// NumSlots is how many slots the device declares, which bounds the slot
+	// index a batch slot operand may carry.
+	NumSlots() int
+	// HoldsCircuit reports whether the thing can hold a programmable chip,
+	// which is what makes it reachable as db, and known whether the extraction
+	// decided that at all. A false known is not a denial, and nothing may read
+	// it as one.
+	HoldsCircuit() (holds, known bool)
+	// NumModes is how many settings the device's Mode property selects between,
+	// and known reports whether the extraction recovered them at all. A device
+	// that fills its mode names at run time answers false, and nothing may
+	// conclude a mode number is out of range for one.
+	NumModes() (count int, known bool)
+	// RefusesLogic reports whether a completed device is known to answer
+	// nothing for logicType in dir. logicType is the encoding [Member.Value]
+	// carries.
+	RefusesLogic(logicType int, dir Direction) bool
+	// RefusesSlot is [Prefab.RefusesLogic] for one slot's own properties. slot
+	// is below NumSlots.
+	RefusesSlot(slot, slotType int, dir Direction) bool
+}
+
+// Member is one resolved machine name. Deprecated is carried because the
+// game marks some logic types retired while still resolving every one of
+// them; nothing about the emitted program changes, so it is the programmer,
+// not the compiler, that has to act on it.
 type Member struct {
 	// Value is the integer the machine encodes the name as.
 	Value int
 	// Deprecated reports whether the game's own tables list the member as
 	// retired.
 	Deprecated bool
-}
-
-// maxDevicePin is the highest pin a housing has. d6 and above compile on the
-// chip and then fault once per tick, so the compiler is the only thing that can
-// reject them.
-const maxDevicePin = 5
-
-// devicePin resolves a device operand spelling to its pin number, reporting
-// -1 for db, which addresses the housing rather than a pin.
-func devicePin(name string) (int64, bool) {
-	if name == "db" {
-		return -1, true
-	}
-	digits, ok := strings.CutPrefix(name, "d")
-	if !ok || len(digits) != 1 || digits[0] < '0' || digits[0] > '9' {
-		return 0, false
-	}
-	n := int64(digits[0] - '0')
-	if n > maxDevicePin {
-		return 0, false
-	}
-	return n, true
-}
-
-// isDevicePinSpelling reports whether name is one a device position resolves,
-// which is what makes it a spelling no declaration may take.
-func isDevicePinSpelling(name string) bool {
-	_, ok := devicePin(name)
-	return ok
 }
 
 // hashString is the compile-time value of __ic_hash: the CRC-32 of the

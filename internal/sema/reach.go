@@ -1,17 +1,24 @@
 package sema
 
-import "slices"
+import (
+	"slices"
 
-import "github.com/greg2010/ic11c/internal/ast"
+	"github.com/greg2010/ic11c/internal/ast"
+)
 
-// terminates reports whether control cannot reach the end of s. It answers two
-// questions: whether a switch arm falls into the next one, and whether control
-// can reach the end of a function that owes a value.
-//
-// break and continue terminate the statement they are written in, since control
-// leaves it. A loop is asked a different question — whether control can leave
-// the loop at all — so it consults the jumps bound to it rather than this.
+// terminates reports whether control cannot reach the end of s: whether a
+// switch arm falls into the next one, or a function reaches its end without
+// returning a value it owes.
 func (c *checker) terminates(s ast.Stmt) bool {
+	if got, asked := c.terminated[s]; asked {
+		return got
+	}
+	trapped := c.stmtTerminates(s)
+	c.terminated[s] = trapped
+	return trapped
+}
+
+func (c *checker) stmtTerminates(s ast.Stmt) bool {
 	switch s := s.(type) {
 	case *ast.ReturnStmt, *ast.BreakStmt, *ast.ContinueStmt:
 		return true
@@ -68,13 +75,14 @@ func (c *checker) switchTerminates(s *ast.SwitchStmt) bool {
 }
 
 // isAlwaysTrue reports whether a controlling expression is a constant the loop
-// can never leave on.
+// can never leave on. The truth of the constant is read through Num rather than
+// off Int, which carries nothing for a double.
 func (c *checker) isAlwaysTrue(x ast.Expr) bool {
 	if x == nil {
 		return true
 	}
 	v, fail := c.constEval(x, arithmeticConst)
-	return fail == nil && v.Int != 0
+	return fail == nil && v.Num() != 0
 }
 
 // jump names the two statements that leave a construct from inside it. Which

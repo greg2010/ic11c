@@ -1,7 +1,6 @@
 package sema
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/greg2010/ic11c/internal/ast"
@@ -30,8 +29,8 @@ const (
 	// OperandSlot is a slot index, which must be an integer constant
 	// expression, the form an array bound and a case label take.
 	OperandSlot
-	// OperandDevice is a device pin, written as db, d0 through d5, or a dev
-	// object or parameter.
+	// OperandDevice is a device pin, written as db, a numbered housing pin, or
+	// a dev object or parameter. See [deviceSpellings].
 	OperandDevice
 	// OperandLogicType is a logic type name from the generated tables.
 	OperandLogicType
@@ -62,10 +61,7 @@ var operandKindNames = [...]string{
 }
 
 func (k OperandKind) String() string {
-	if int(k) < len(operandKindNames) && operandKindNames[k] != "" {
-		return operandKindNames[k]
-	}
-	return "OperandKind(" + strconv.Itoa(int(k)) + ")"
+	return source.EnumName(operandKindNames[:], int(k), "OperandKind")
 }
 
 // Intrinsic is the signature of one intrinsic. Intrinsics are ordinary
@@ -76,9 +72,8 @@ type Intrinsic struct {
 	Params []OperandKind
 	// Pure reports that the instruction computes a result and does nothing
 	// else, so a call whose result nothing reads may be deleted. Every
-	// intrinsic MicroC exposes is impure or unresolved by default: a device
-	// access is observable, a yield is timing, and rand answers differently
-	// each time.
+	// intrinsic defaults to impure: a device access is observable, a yield is
+	// timing, and rand answers differently each time.
 	Pure bool
 }
 
@@ -98,7 +93,7 @@ type Operand struct {
 	Resolved bool
 	// DeviceParam is the dev parameter a device operand named, and nil
 	// otherwise. Which pin it stands for is decided by the call site the body
-	// is spliced into, so IR generation resolves it.
+	// is spliced into.
 	DeviceParam *Symbol
 }
 
@@ -107,123 +102,16 @@ type Operand struct {
 type IntrinsicCall struct {
 	Intrinsic *Intrinsic
 	Args      []Operand
-	// ResultMayBeNonFinite reports that the instruction this call becomes can
-	// put a NaN or an infinity in a register. MicroC has neither and IR
-	// generation types every long long as an integer, so the optimizer reasons
-	// about a value this produces under an assumption the machine does not
-	// honour, and every operation and comparison it reaches has to be protected
-	// from that. See [nonFiniteResultIntrinsics].
-	ResultMayBeNonFinite bool
-}
-
-// nonFiniteResultIntrinsics names the intrinsics whose machine instruction can
-// answer outside the finite doubles given operands that are inside them, and
-// the batch mode operand that has to select it where one does.
-//
-// The property tracked is non-finiteness rather than NaN alone, because the two
-// travel together. Every identity the optimizer applies to an operation the
-// machine computes in a register — an integer difference of a value with
-// itself, a product with zero, a quotient of a value by itself, and the ordered
-// comparisons — is unsound for an infinity for exactly the reason it is unsound
-// for a NaN, and an infinity is one arithmetic step from a NaN whichever way it
-// arrived.
-//
-// A batch read matching no device answers Average with NaN and Maximum with
-// negative infinity; Sum and Minimum answer zero, so those two alone are
-// finite. The rest are partial for one of three reasons:
-//
-//   - outside a domain of finite values: sqrt of a negative, log of a negative
-//     or of zero, asin or acos past 1, and pow of a negative base under a
-//     fractional exponent;
-//   - at an infinity: sin, cos and tan, which have no limit there, and lerp,
-//     whose infinite endpoint less its other endpoint, or times a zero weight,
-//     is a NaN;
-//   - past what a double holds: exp and pow overflow to an infinity from finite
-//     operands.
-//
-// Every intrinsic absent from this table answers a finite double for every
-// finite double the machine holds — atan and atan2 have bounded ranges, min,
-// max and clamp answer with one of their operands, sgn answers 0, 1 or -1, rand
-// draws between 0 and 1, and the rounding family maps a finite value to a
-// finite one — or faults instead, which is what a read of an unconnected pin
-// does. A value that is already non-finite reaches those through the taint walk
-// rather than through this table.
-//
-// batchModeArg is the index of the operand naming the aggregate, or -1 for an
-// intrinsic whose result does not depend on one.
-var nonFiniteResultIntrinsics = map[string]struct{ batchModeArg int }{
-	"__ic_load_batch":            {batchModeArg: 2},
-	"__ic_load_batch_named":      {batchModeArg: 3},
-	"__ic_load_batch_slot":       {batchModeArg: 3},
-	"__ic_load_batch_named_slot": {batchModeArg: 4},
-
-	"__ic_sqrt": {batchModeArg: -1},
-	"__ic_log":  {batchModeArg: -1},
-	"__ic_asin": {batchModeArg: -1},
-	"__ic_acos": {batchModeArg: -1},
-	"__ic_pow":  {batchModeArg: -1},
-	"__ic_exp":  {batchModeArg: -1},
-	"__ic_sin":  {batchModeArg: -1},
-	"__ic_cos":  {batchModeArg: -1},
-	"__ic_tan":  {batchModeArg: -1},
-	"__ic_lerp": {batchModeArg: -1},
-}
-
-// nonFiniteBatchModes are the aggregates a batch read with no matching device
-// answers outside the finite doubles: Average with NaN, Maximum with negative
-// infinity.
-var nonFiniteBatchModes = map[string]bool{"Average": true, "Maximum": true}
-
-// The guarded ordered comparisons. IR generation emits a call to one of these
-// in place of an ordered comparison a value marked by
-// [nonFiniteResultIntrinsics] can reach, and instruction selection turns it
-// back into the machine's own
-// compare-and-branch. Standing between the two is what withholds the comparison
-// from the optimizer, which would otherwise rewrite the predicate into its
-// negation with the branch targets swapped — sound over integers and a
-// miscompilation over doubles, where an ordered comparison and its negation are
-// both false for a NaN.
-//
-// The names live here because this package owns the reserved prefix. No source
-// line contains one: a program declaring the name is rejected for using the
-// prefix, and a call to it is an unrecognized intrinsic.
-const (
-	CompareLT = reservedPrefix + "cmp_lt"
-	CompareLE = reservedPrefix + "cmp_le"
-	CompareGT = reservedPrefix + "cmp_gt"
-	CompareGE = reservedPrefix + "cmp_ge"
-)
-
-// resultMayBeNonFinite answers [IntrinsicCall.ResultMayBeNonFinite] for one
-// resolved call.
-func resultMayBeNonFinite(call *IntrinsicCall) bool {
-	source, known := nonFiniteResultIntrinsics[call.Intrinsic.Name]
-	if !known {
-		return false
-	}
-	if source.batchModeArg < 0 {
-		return true
-	}
-	if source.batchModeArg >= len(call.Args) {
-		// The arity was wrong, which is already reported. Assuming the mode
-		// that can produce one keeps this from being the thing that decides
-		// whether a broken call compiles.
-		return true
-	}
-	return nonFiniteBatchModes[call.Args[source.batchModeArg].Name]
 }
 
 func def(name string, result *Type, params ...OperandKind) *Intrinsic {
 	return &Intrinsic{Name: name, Result: result, Params: params}
 }
 
-// Intrinsics is every intrinsic MicroC defines.
-//
-// The entries are shared and must not be modified. It is exported for the check
-// that the C prelude in internal/ic10 declares a prototype for each of them and
-// for no other name; that header is written as literal text by a generator
-// which cannot read this table, so the two are otherwise unrelated. Analysis
-// resolves a call through an index built from it rather than through the slice.
+// Intrinsics is every intrinsic MicroC defines. The entries are shared and
+// must not be modified. It is exported so a test can check that the C
+// prelude in internal/ic10 declares a prototype for exactly these names,
+// since that header is generated text with no way to read this table.
 var Intrinsics = buildIntrinsics()
 
 // intrinsics indexes [Intrinsics] by name.
@@ -259,11 +147,8 @@ func buildIntrinsics() []*Intrinsic {
 	} {
 		list = append(list, def(name, DoubleType, OperandDouble))
 	}
-	// The toward-zero rounding is a function of its argument and touches
-	// nothing, so a dead one may be deleted and two of the same argument may be
-	// merged. IR generation reads it as the barrier that keeps the optimizer's
-	// idea of an integer's range off the arithmetic a non-finite value reaches,
-	// and every such reading would cost an instruction of its own without this.
+	// __ic_trunc is a pure function of its argument, so a dead call may be
+	// deleted and repeated calls with the same argument merged.
 	trunc := def("__ic_trunc", DoubleType, OperandDouble)
 	trunc.Pure = true
 	list = append(list, trunc)
@@ -299,33 +184,31 @@ func (c *checker) intrinsicCall(x *ast.CallExpr, in *Intrinsic) *Type {
 		}
 		call.Args = append(call.Args, c.operand(in, i, arg))
 	}
-	call.ResultMayBeNonFinite = resultMayBeNonFinite(call)
 	c.prog.Intrinsics[x] = call
+	c.noteDeviceCall(x, in)
 	return in.Result
 }
 
-// operand checks one argument against the parameter kind at index i.
-//
-// A table name is not looked up in scope: a logic type carries meaning only
-// here, and a variable of the same name is a different thing. A device is the
-// one named operand that can also be a declaration, since dev is a type, and a
-// bare pin spelling still wins over a variable of the same name.
+// operand checks one argument against the parameter kind at index i. A
+// table name is not looked up in scope: a logic type carries meaning only
+// here, and a variable of the same name is a different thing. A device is
+// the one named operand that can also be a declaration, since dev is a type.
 func (c *checker) operand(in *Intrinsic, i int, arg ast.Expr) Operand {
 	kind := in.Params[i]
 	switch kind {
 	case OperandValue:
 		t := c.expr(arg)
-		c.assign(IntType, t, arg, "an argument to "+in.Name)
+		c.checkAssignable(IntType, t, arg, "an argument to "+in.Name)
 		return Operand{Kind: kind}
 
 	case OperandDouble:
 		t := c.expr(arg)
-		c.assign(DoubleType, t, arg, "an argument to "+in.Name)
+		c.checkAssignable(DoubleType, t, arg, "an argument to "+in.Name)
 		return Operand{Kind: kind}
 
 	case OperandSlot:
 		t := c.expr(arg)
-		c.assign(IntType, t, arg, "an argument to "+in.Name)
+		c.checkAssignable(IntType, t, arg, "an argument to "+in.Name)
 		v, ok := c.requireConst(arg, integerConst, "the slot index of "+in.Name)
 		// A device's slots are indexed from zero. The chip resolves the operand
 		// when the line is assembled and checks nothing, so a negative index
@@ -370,24 +253,24 @@ func (c *checker) namedOperand(in *Intrinsic, kind OperandKind, arg ast.Expr) Op
 		c.errorf(arg.Pos(), "the %s argument of %s must be written as a name", kind, in.Name)
 		return Operand{Kind: kind}
 	}
-	var member Member
-	switch kind {
-	case OperandLogicType:
-		member, ok = c.tables.LogicType(id.Name)
-	case OperandSlotType:
-		member, ok = c.tables.LogicSlotType(id.Name)
-	case OperandBatchMode:
-		member, ok = c.tables.BatchMode(id.Name)
-	case OperandReagentMode:
-		member, ok = c.tables.ReagentMode(id.Name)
-	case OperandValue, OperandDouble, OperandSlot, OperandDevice, OperandString:
-		// No table names these, and the caller routes only the four above here.
-		return Operand{Kind: kind, Name: id.Name}
-	}
-	if !ok {
+
+	spelling, member, base := c.resolveOperandName(kind, id.Name)
+	switch spelling {
+	case spellingUnknown:
 		c.errorf(id.NamePos, "'%s' is not a %s", id.Name, kind)
 		return Operand{Kind: kind, Name: id.Name}
+	case spellingShadowed:
+		owner, _ := c.bareOwner(id.Name)
+		c.errorf(id.NamePos, "'%s' is a %s; an operand name resolves in one namespace, as it does in C, so the bare spelling means that in every position — the %s of the same name is spelled '%s'",
+			id.Name, owner, kind, operandPrefixes[kind]+id.Name)
+		return Operand{Kind: kind, Name: id.Name}
+	case spellingOverPrefixed:
+		c.errorf(id.NamePos, "'%s' is not a %s; only a name an earlier family has already taken is spelled with '%s', so write '%s'",
+			id.Name, kind, operandPrefixes[kind], base)
+		return Operand{Kind: kind, Name: id.Name}
+	case spellingBare, spellingPrefixed:
 	}
+
 	if member.Deprecated {
 		// Not an error: the chip resolves a retired member exactly like any
 		// other, so refusing would reject a program that works today. What the

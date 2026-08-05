@@ -66,6 +66,31 @@ func TestEveryOpIsNamed(t *testing.T) {
 	}
 }
 
+// TestAnUnnamedOperatorRendersAsItsNumber covers the answer a value outside
+// the name table gets: rendering as its number rather than an empty string,
+// which would let a new operator ship unnamed and read as nothing in a
+// diagnostic.
+func TestAnUnnamedOperatorRendersAsItsNumber(t *testing.T) {
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{name: "scalar kind", got: ast.ScalarKind(200).String(), want: "ScalarKind(200)"},
+		{name: "unary op", got: ast.UnaryOp(200).String(), want: "UnaryOp(200)"},
+		{name: "increment op", got: ast.IncDecOp(200).String(), want: "IncDecOp(200)"},
+		{name: "binary op", got: ast.BinaryOp(200).String(), want: "BinaryOp(200)"},
+		{name: "assign op", got: ast.AssignOp(200).String(), want: "AssignOp(200)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("String() = %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
 // TestNodePositionDelegation pins the nodes whose position is borrowed from a
 // child rather than taken from their own operator token, since that is where a
 // diagnostic would otherwise point at the wrong place.

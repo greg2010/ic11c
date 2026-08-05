@@ -5,16 +5,6 @@ import (
 	"github.com/greg2010/ic11c/internal/source"
 )
 
-// A pointer is an index into the 512-slot space and must trace at compile time
-// to exactly one object, because the backend has no way to load through a base
-// it cannot name. This file implements the half of that rule the source can
-// show: an expression that visibly merges two objects.
-//
-// The authoritative check runs after optimization, which can manufacture merges
-// the source never wrote. Nothing here should be read as the last line of
-// defense: where provenance cannot be determined, analysis stays quiet and
-// leaves the verdict to the verifier.
-
 // objectOf reports which object a pointer expression designates. The second
 // result is false when the expression traces to no single object analysis can
 // name, which is not a rejection.
@@ -77,7 +67,10 @@ func (c *checker) storageOf(x ast.Expr) (object, bool) {
 	}
 }
 
-// sameObject rejects an expression that merges two objects into one pointer.
+// sameObject rejects an expression that merges two objects into one
+// pointer. A pointer is an index into the 512-slot space and must trace at
+// compile time to exactly one object, since the backend has no way to load
+// through a base it cannot name.
 func (c *checker) sameObject(a, b ast.Expr, pos source.Position, what string) {
 	if c.prog.Types[a].Kind() == Invalid || c.prog.Types[b].Kind() == Invalid {
 		return

@@ -1,6 +1,7 @@
 package source
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -21,16 +22,9 @@ const (
 	Warning
 )
 
-func (s Severity) String() string {
-	switch s {
-	case Error:
-		return "error"
-	case Warning:
-		return "warning"
-	default:
-		return "Severity(" + strconv.FormatUint(uint64(s), 10) + ")"
-	}
-}
+var severityNames = [...]string{Error: "error", Warning: "warning"}
+
+func (s Severity) String() string { return EnumName(severityNames[:], int(s), "Severity") }
 
 // Diagnostic is one construct the compiler has something to say about, located
 // in the source.
@@ -38,6 +32,11 @@ type Diagnostic struct {
 	Pos      Position
 	Severity Severity
 	Msg      string
+	// Overflow marks the note closing a list that was cut short at a cap. It
+	// describes a limit the compiler imposes on itself rather than anything
+	// wrong with the program, so the counts that decide rejection skip it. See
+	// [DiagnosticList.Overflow].
+	Overflow bool
 }
 
 // Error renders the diagnostic as "position: message", with the severity named
@@ -67,21 +66,37 @@ func (l *DiagnosticList) Warnf(pos Position, format string, args ...any) {
 	*l = append(*l, Diagnostic{Pos: pos, Severity: Warning, Msg: fmt.Sprintf(format, args...)})
 }
 
-// HasErrors reports whether any diagnostic rejects the program.
+// Overflow closes a list cut short at a cap with the note saying so, at
+// pos: where the first problem withheld sits. Call it after
+// [DiagnosticList.Sort]. The note is excluded from [DiagnosticList.Errors]
+// and [DiagnosticList.HasErrors].
+func (l *DiagnosticList) Overflow(pos Position, severity Severity) {
+	*l = append(*l, Diagnostic{
+		Pos:      pos,
+		Severity: severity,
+		Msg:      "too many " + severity.String() + "s",
+		Overflow: true,
+	})
+}
+
+// HasErrors reports whether any diagnostic rejects the program. The note
+// closing a cut-short list is not one, whatever severity it carries.
 func (l DiagnosticList) HasErrors() bool {
 	for _, d := range l {
-		if d.Severity == Error {
+		if d.Severity == Error && !d.Overflow {
 			return true
 		}
 	}
 	return false
 }
 
-// Errors counts the diagnostics that reject the program.
+// Errors counts the diagnostics that reject the program, which is the number a
+// report may print. The note closing a cut-short list is not counted; see
+// [DiagnosticList.Overflow].
 func (l DiagnosticList) Errors() int {
 	n := 0
 	for _, d := range l {
-		if d.Severity == Error {
+		if d.Severity == Error && !d.Overflow {
 			n++
 		}
 	}
@@ -108,12 +123,9 @@ func (l DiagnosticList) Error() string {
 	}
 }
 
-// Plural renders a count and its noun, adding an s to the noun for any count
-// but one. It lives here because every stage that reports to the programmer
-// already depends on this package, and a message reading "expects 1 arguments"
-// is the kind of thing that gets noticed instead of the message.
+// Plural renders a count and its noun, adding an s for any count but one.
 //
-// The noun must have a regular plural. Nothing the compiler counts does not.
+// The noun must have a regular plural; nothing the compiler counts does not.
 func Plural(n int, noun string) string {
 	if n == 1 {
 		return "1 " + noun
@@ -129,6 +141,14 @@ func (l DiagnosticList) Err() error {
 		return nil
 	}
 	return l
+}
+
+// DiagnosticsIn recovers a list returned as an error by [DiagnosticList.Err],
+// however deeply wrapped, which is how a caller separates a stage's report
+// against the program from a failure of the stage itself. A diagnostic names the
+// line to act on, so a caller finding one passes it on rather than wraps it.
+func DiagnosticsIn(err error) (DiagnosticList, bool) {
+	return errors.AsType[DiagnosticList](err)
 }
 
 // String renders every diagnostic on its own line.

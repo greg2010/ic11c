@@ -8,11 +8,11 @@ import (
 func (c *checker) stmt(s ast.Stmt) {
 	switch s := s.(type) {
 	case *ast.BlockStmt:
-		c.push()
+		c.scope.push()
 		for _, inner := range s.Stmts {
 			c.stmt(inner)
 		}
-		c.pop()
+		c.scope.pop()
 	case *ast.VarDecl:
 		c.varDecl(s, LocalVar)
 	case *ast.ExprStmt:
@@ -63,15 +63,15 @@ func (c *checker) scopedStmt(s ast.Stmt) {
 		c.stmt(s)
 		return
 	}
-	c.push()
+	c.scope.push()
 	c.stmt(s)
-	c.pop()
+	c.scope.pop()
 }
 
 // forStmt checks a counted loop. The init clause is scoped to the loop, so a
 // variable declared there does not outlive it.
 func (c *checker) forStmt(s *ast.ForStmt) {
-	c.push()
+	c.scope.push()
 	if s.Init != nil {
 		c.stmt(s.Init)
 	}
@@ -84,7 +84,7 @@ func (c *checker) forStmt(s *ast.ForStmt) {
 	c.loops++
 	c.scopedStmt(s.Body)
 	c.loops--
-	c.pop()
+	c.scope.pop()
 }
 
 func (c *checker) returnStmt(s *ast.ReturnStmt) {
@@ -103,7 +103,7 @@ func (c *checker) returnStmt(s *ast.ReturnStmt) {
 		c.errorf(s.Result.Pos(), "'%s' returns void and may not return a value", c.fn.Name)
 		return
 	}
-	c.assign(result, t, s.Result, "a return from '"+c.fn.Name+"'")
+	c.checkAssignable(result, t, s.Result, "a return from '"+c.fn.Name+"'")
 }
 
 // switchStmt checks a switch: the tag, the constancy, type, and distinctness of
@@ -119,7 +119,7 @@ func (c *checker) switchStmt(s *ast.SwitchStmt) {
 
 	c.switches++
 	// The switch body is one scope, however many arms it has.
-	c.push()
+	c.scope.push()
 
 	labels := make([]*Value, len(s.Cases))
 	seen := make(map[int64]source.Position, len(s.Cases))
@@ -140,7 +140,7 @@ func (c *checker) switchStmt(s *ast.SwitchStmt) {
 	}
 	c.checkFallthrough(s, labels)
 
-	c.pop()
+	c.scope.pop()
 	c.switches--
 }
 

@@ -71,7 +71,7 @@ func TestCurrentMachineNameIsSilent(t *testing.T) {
 	}{
 		{name: "a current logic type", src: "void main(void) { __ic_store(d0, Setting, 1); }"},
 		{name: "a current slot type", src: "void main(void) { __ic_store(d0, Setting, __ic_load_slot(d0, 0, Occupied)); }"},
-		{name: "a batch mode", src: "void main(void) { __ic_store(d0, Setting, __ic_load_batch(1, Temperature, Average)); }"},
+		{name: "a batch mode", src: "void main(void) { __ic_store(d0, Setting, __ic_load_batch(__ic_hash(\"StructureStubSensor\"), Temperature, Average)); }"},
 		{name: "a reagent mode", src: "void main(void) { __ic_store(d0, Setting, __ic_load_reagent(d0, Contents, 1)); }"},
 	}
 	for _, tt := range tests {

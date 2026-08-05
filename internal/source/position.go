@@ -1,8 +1,7 @@
-// Package source locates and reports problems in MicroC source text.
-//
-// It holds the position and diagnostic types every stage reports against, from
-// lexing through instruction selection. It depends on nothing, so no stage has
-// to import another merely to name a source location.
+// Package source locates and reports problems in MicroC source text. It
+// holds the position and diagnostic types every stage reports against,
+// from lexing through instruction selection, and depends on nothing else
+// in the tree.
 package source
 
 import (
@@ -13,10 +12,8 @@ import (
 
 // Position identifies one byte of one source file. The zero value is invalid.
 //
-// Column counts bytes rather than runes, so a position inside a multi-byte rune
-// in a string literal names the byte. Every AST node carries a Position, and
-// those positions become LLVM debug locations, so a backend rejection can name
-// the source line responsible.
+// Column counts bytes rather than runes, so a position inside a multi-byte
+// rune in a string literal names the byte, not the character.
 type Position struct {
 	// File names the source. It is carried for diagnostic rendering and is
 	// never opened.
@@ -32,12 +29,10 @@ type Position struct {
 // IsValid reports whether p refers to a real source location.
 func (p Position) IsValid() bool { return p.Line > 0 }
 
-// Compare orders two positions in reading order.
-//
-// Line and column decide it, not Offset. A position rebuilt from an LLVM debug
-// location carries only those two, so ordering on Offset alone would sort every
-// backend diagnostic ahead of every front-end one. Offset breaks the remaining
-// ties.
+// Compare orders two positions in reading order. Line and column decide
+// it, not Offset: a position rebuilt from an LLVM debug location carries
+// only those two, so ordering on Offset alone would put every backend
+// diagnostic ahead of every front-end one.
 func (p Position) Compare(q Position) int {
 	if c := cmp.Compare(p.Line, q.Line); c != 0 {
 		return c
@@ -61,12 +56,10 @@ type LineCol struct {
 	Column int
 }
 
-// InlineSite is one call whose body was spliced into its caller.
-//
-// Calls are inlined by default, so a function called from three places
-// contributes its bytes three times and a total per function says nothing about
-// which of the three to cut. Attribution keyed on the site is what tells them
-// apart.
+// InlineSite is one call whose body was spliced into its caller. Calls
+// are inlined by default, so a function called from three places
+// contributes its bytes three times; attribution keyed on the call site
+// is what a size report can use to tell them apart.
 type InlineSite struct {
 	// Pos is the call expression, in the caller.
 	Pos Position
@@ -74,12 +67,10 @@ type InlineSite struct {
 	Callee string
 }
 
-// String renders the site as "callee inlined at position".
-//
-// A site with no valid position is one the optimizer merged: two expansions of
-// one callee that produced identical code become a single sequence, and the
-// location LLVM gives it names no line. Saying so is better than naming a line
-// that was chosen arbitrarily between the two.
+// String renders the site as "callee inlined at position". A site with
+// no valid position is one the optimizer merged: two identical expansions
+// became one, and the merged location names no line. Naming that beats
+// picking an arbitrary line between the two.
 func (s InlineSite) String() string {
 	name := s.Callee
 	if name == "" {
@@ -91,13 +82,10 @@ func (s InlineSite) String() string {
 	return name + " inlined at " + s.Pos.String()
 }
 
-// LineMap gives the byte offset of a line and column in one source file.
-//
-// An LLVM debug location carries a line and a column and no offset, so a
-// position rebuilt from one downstream has none either. This restores it, which
-// keeps Position a complete value for anything that indexes the source text by
-// it. The zero value is unusable; a nil *LineMap answers zero for everything,
-// which is what a stage with no source text in hand gets.
+// LineMap gives the byte offset of a line and column in one source file,
+// restoring what an LLVM debug location does not carry. The zero value
+// is unusable; a nil *LineMap answers zero for everything, which is what
+// a stage with no source text gets.
 type LineMap struct {
 	// starts holds the byte offset each line begins at, indexed by line-1.
 	starts []int
@@ -116,12 +104,9 @@ func NewLineMap(src string) *LineMap {
 	return &LineMap{starts: starts, size: len(src)}
 }
 
-// Position rebuilds a full position from what an LLVM debug location carries.
-//
-// A location holds a line and a column and neither the file nor the byte
-// offset, so the file is supplied by the caller and the offset comes from m. A
-// nil m answers offset zero, which is the position a stage holding no source
-// text gets.
+// Position rebuilds a full position from what an LLVM debug location
+// carries: a line and a column, neither a file nor a byte offset. The file
+// comes from the caller and the offset from m; a nil m answers offset zero.
 func (m *LineMap) Position(file string, line, column int) Position {
 	return Position{
 		File:   file,
@@ -131,13 +116,10 @@ func (m *LineMap) Position(file string, line, column int) Position {
 	}
 }
 
-// Offset gives the byte offset of a 1-based line and column, or zero for a
-// position outside the file. Zero is also the offset of the file's first byte,
-// which is why callers treat it as "unknown" rather than branching on it.
-//
-// The column is bounded by the line it names, so a column past the end of a
-// line answers zero rather than an offset inside the next one. The line's own
-// terminator is in bounds: a position may name the end of a line.
+// Offset gives the byte offset of a 1-based line and column, or zero
+// when the position is outside the file — also the offset of the file's
+// first byte, so callers treat zero as "unknown". A column past a
+// line's end answers zero, not an offset into the next line.
 func (m *LineMap) Offset(line, column int) int {
 	if m == nil || line < 1 || line > len(m.starts) || column < 1 {
 		return 0

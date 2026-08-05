@@ -1,27 +1,35 @@
 package sema
 
 import (
+	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/greg2010/ic11c/internal/ast"
+	"github.com/greg2010/ic11c/internal/ic10"
 )
 
-// Device is a resolved device operand: the housing, or one of its pins.
-//
-// A device is a compile-time value throughout. The chip resolves a device
-// position when the line is assembled and checks nothing, so a literal is the
-// only thing that may stand there, and a dev object, a dev parameter, and a
-// written pin all have to fold to one before instruction selection runs.
+// Device is a resolved device operand: the housing, or one of its pins. It
+// is a compile-time value throughout — the chip resolves a device position
+// when the line is assembled and checks nothing, so a literal is the only
+// thing that may stand there.
 type Device struct {
 	// Base is db, the housing the chip is inserted into.
 	Base bool
-	// Pin is the pin index of a d0 through d5 operand.
+	// Pin is the index of one of the housing's numbered pins.
 	Pin uint8
 }
 
-// baseDevice is the encoding of db, which takes no pin.
+// baseDevice is the encoding of db, which takes no pin. It is what
+// [devicePin] answers for the spelling as well as what [Device.Code] emits, so
+// the two cannot come to disagree about which integer means the housing.
 const baseDevice = -1
+
+// maxDevicePin is the highest pin a housing has. A pin past it assembles on the
+// chip and then faults once per tick with no error naming it, so the compiler is
+// the only thing that can reject one.
+const maxDevicePin = ic10.NumDevicePins - 1
 
 // BaseDevice is db, the housing the chip is inserted into.
 func BaseDevice() Device { return Device{Base: true} }
@@ -47,11 +55,9 @@ func (d Device) Code() int64 {
 }
 
 // DecodeDevice reverses [Device.Code], reporting false for an encoding no
-// device produces.
-//
-// The pin it reads back is not checked against the housing. A pin the housing
-// does not have is a diagnostic instruction selection owns, where the argument
-// it came from can be named, and it needs the number to name it with.
+// device produces. The pin it reads back is not checked against the
+// housing: a pin the housing lacks is a diagnostic instruction selection
+// owns, where the argument it came from can still be named.
 func DecodeDevice(code int64) (Device, bool) {
 	if code == baseDevice {
 		return BaseDevice(), true
@@ -63,17 +69,38 @@ func DecodeDevice(code int64) (Device, bool) {
 }
 
 // deviceSpellings describes what a device position accepts, for the diagnostic
-// that reports one it does not.
-const deviceSpellings = "db, d0 through d5, or a dev object"
+// that reports one it does not. The range is spelled out of the pin count rather
+// than written, so the sentence cannot outlive a game build that moves it.
+var deviceSpellings = fmt.Sprintf("db, d0 through d%d, or a dev object", maxDevicePin)
 
-// resolveDevice reads a device-valued expression.
-//
-// It answers with a fixed device, or with the dev parameter whose device the
-// call site supplies — which is left for IR generation, since the pin is a
-// property of the site the body is spliced into rather than of the body.
-//
-// A bare pin spelling never collides with a variable: the spellings are
-// reserved, so no declaration takes one.
+// devicePin resolves a device operand spelling to its pin number, reporting
+// [baseDevice] for db, which addresses the housing rather than a pin.
+func devicePin(name string) (int64, bool) {
+	if name == "db" {
+		return baseDevice, true
+	}
+	digits, ok := strings.CutPrefix(name, "d")
+	if !ok || len(digits) != 1 || digits[0] < '0' || digits[0] > '9' {
+		return 0, false
+	}
+	n := int64(digits[0] - '0')
+	if n > maxDevicePin {
+		return 0, false
+	}
+	return n, true
+}
+
+// isDevicePinSpelling reports whether name is one a device position resolves,
+// which is what makes it a spelling no declaration may take.
+func isDevicePinSpelling(name string) bool {
+	_, ok := devicePin(name)
+	return ok
+}
+
+// resolveDevice reads a device-valued expression, answering with a fixed
+// device or with the dev parameter whose device the call site supplies —
+// left unresolved here, since the pin is a property of the site rather than
+// of the body. A bare pin spelling never collides with a variable.
 func (c *checker) resolveDevice(x ast.Expr, what string) (Device, *Symbol, bool) {
 	id, named := x.(*ast.Ident)
 	if !named {
@@ -82,7 +109,7 @@ func (c *checker) resolveDevice(x ast.Expr, what string) (Device, *Symbol, bool)
 	}
 	if pin, isPin := devicePin(id.Name); isPin {
 		device := BaseDevice()
-		if pin >= 0 {
+		if pin != baseDevice {
 			device = PinDevice(uint8(pin))
 		}
 		c.prog.Types[id] = DevType
@@ -122,4 +149,21 @@ func (c *checker) deviceExpr(x ast.Expr, what string) (Device, bool) {
 		return Device{}, false
 	}
 	return device, true
+}
+
+// checkDeviceParams reports a dev parameter on a function that cannot be
+// inlined: only inlining substitutes the call site's literal for the
+// parameter, and a recursive function is never inlined.
+func (c *checker) checkDeviceParams() {
+	for _, fn := range c.prog.Funcs {
+		if !fn.Recursive {
+			continue
+		}
+		for _, param := range fn.Params {
+			if unqual(param.Type).Kind() != Dev {
+				continue
+			}
+			c.errorf(param.Pos, "'%s' takes the dev parameter '%s' and can reach itself through a call, so it is compiled out of line rather than inlined; the chip resolves a device position when the line is assembled and a real call would have to pass the pin in a register, which is not a spelling it reads — name the device at each use, or rewrite the recursion as a loop", fn.Name, param.Name)
+		}
+	}
 }

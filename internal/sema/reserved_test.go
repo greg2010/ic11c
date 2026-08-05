@@ -1,12 +1,13 @@
 package sema_test
 
 import (
+	"fmt"
 	"regexp"
 	"testing"
 
 	"github.com/greg2010/ic11c/internal/ic10"
-	"github.com/greg2010/ic11c/internal/parser"
 	"github.com/greg2010/ic11c/internal/sema"
+	"github.com/greg2010/ic11c/internal/tsparse"
 )
 
 // typedefPattern matches the name each typedef in the generated C prelude
@@ -35,11 +36,14 @@ func TestPreludeTypeNamesAreNotDeclarable(t *testing.T) {
 		name := match[1]
 		t.Run(name, func(t *testing.T) {
 			src := "long long " + name + ";\nvoid main(void) { __ic_store(d0, On, 1); }\n"
-			file, diags := parser.Parse("test.c", src)
+			file, diags, err := tsparse.Parse("test.c", src)
+			if err != nil {
+				t.Fatalf("parsing: %v", err)
+			}
 			if len(diags) != 0 {
 				return
 			}
-			_, diags, err := sema.Analyze(t.Context(), file, testTables{})
+			_, diags, err = sema.Analyze(t.Context(), file, testTables{})
 			if err != nil {
 				t.Fatalf("analyzing: %v", err)
 			}
@@ -224,6 +228,70 @@ func TestUnreservedNamesStayDeclarable(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			expectAccepted(t, tt.src)
+		})
+	}
+}
+
+// TestDevicePinSpellingIsNotUndeclared covers the other half of the reservation.
+//
+// A declaration may not take a pin spelling because a device position resolves
+// it without consulting scope. The consequence is that the spelling means
+// something everywhere, so a use of it outside a device position is a device
+// standing where a value belongs rather than a name nothing declares. Reporting
+// it as undeclared contradicts the rule that reserves it and tells the reader to
+// declare the one thing they may not.
+func TestDevicePinSpellingIsNotUndeclared(t *testing.T) {
+	const want = "'%s' names a device pin rather than a value, and no cast turns one into a number; " +
+		"a device stands only in a device position, which the chip resolves when the line is assembled"
+
+	tests := []struct {
+		name string
+		pin  string
+		src  string
+	}{
+		{
+			name: "a pin compared with a dev object",
+			pin:  "d1",
+			src: `const dev sensor = d0;
+void main(void) {
+    if (sensor == /*!*/d1) {
+        __ic_store(sensor, On, 1);
+    }
+}
+`,
+		},
+		{
+			name: "the housing spelling compared with a dev object",
+			pin:  "db",
+			src: `const dev sensor = d0;
+void main(void) {
+    if (sensor == /*!*/db) {
+        __ic_store(sensor, On, 1);
+    }
+}
+`,
+		},
+		{
+			name: "a pin read as a number",
+			pin:  "d2",
+			src: `void main(void) {
+    long long x = /*!*/d2;
+    __ic_store(d0, Setting, x);
+}
+`,
+		},
+		{
+			name: "a pin cast to a number",
+			pin:  "d3",
+			src: `void main(void) {
+    __ic_store(d0, Setting, (long long)/*!*/d3);
+}
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expectRejectedWith(t, tt.src, fmt.Sprintf(want, tt.pin))
 		})
 	}
 }

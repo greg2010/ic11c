@@ -6,23 +6,10 @@ import (
 	"github.com/greg2010/ic11c/internal/ast"
 )
 
-// cType is the C type of an integer operand in a constant expression, after the
-// integer promotions.
-//
-// MicroC has one integer type and the prelude declares it long long, but a
-// literal in the source does not have that type. C gives an integer constant
-// the first type from a list that represents it, and the narrower types on that
-// list are what make 2147483647 + 1 overflow an int and 0x80000000 unsigned.
-// Folding in the machine's own 64-bit signed arithmetic without modelling them
-// computes numbers the C the same file is read as does not.
-//
-// The model is target independent. C's lists name long between int and long
-// long, and long is 64 bits under LP64 and 32 under LLP64 — but where it is 32
-// bits it has the range of int and never takes a place on either list that int
-// or unsigned int has not already taken. Every target whose int is 32 bits and
-// whose long long is 64 therefore gives a constant the same width and
-// signedness, and only the spelling of the type differs. A target with a
-// narrower int would not, and there is none the prelude supports.
+// cType is the C type of an integer operand in a constant expression, after
+// the integer promotions. A literal does not start out as long long: C
+// gives it the first type from a list that represents it, so 2147483647 + 1
+// overflows an int and 0x80000000 is unsigned, unlike a 64-bit fold.
 type cType struct {
 	bits     uint8
 	unsigned bool
@@ -71,13 +58,36 @@ func (t cType) holds(v int64) bool {
 	}
 }
 
+// min gives the smallest value t holds, which is zero for an unsigned type.
+// For a signed type it is the one dividend C has no quotient for, since
+// negating it overflows t; an unsigned type has no such dividend, and zero
+// is not one.
+func (t cType) min() int64 {
+	if t.unsigned {
+		return 0
+	}
+	return int64(-1) << (t.bits - 1)
+}
+
+// convert gives the number v becomes once C converts it to t. It is the
+// identity exactly where [cType.holds] reports true; everywhere else it reduces
+// modulo the width of t, which is C's conversion to an unsigned type and what
+// every target this model covers does for the signed one.
+func (t cType) convert(v int64) int64 {
+	switch {
+	case t.bits == machineBits:
+		return v
+	case t.unsigned:
+		return int64(uint32(v))
+	default:
+		return int64(int32(v))
+	}
+}
+
 // usualArith gives the type C's usual arithmetic conversions convert both
-// operands of a binary operator to.
-//
-// The wider type wins outright rather than lending its rank to an unsigned one,
-// because the only widths here are 32 and 64: a 64-bit signed type holds every
-// value of a 32-bit unsigned one, which is the pairing C resolves in favour of
-// the signed type.
+// operands of a binary operator to. The wider type always wins here, since
+// the only widths involved are 32 and 64, and a 64-bit signed type holds
+// every value a 32-bit unsigned one can.
 func usualArith(a, b cType) cType {
 	if a.bits == b.bits {
 		return cType{bits: a.bits, unsigned: a.unsigned || b.unsigned}
@@ -88,14 +98,26 @@ func usualArith(a, b cType) cType {
 	return b
 }
 
+// ctypeResult is what one lookup answered, kept so that a second ask does not
+// walk the operand tree again.
+type ctypeResult struct {
+	t     cType
+	known bool
+}
+
 // cTypeOf gives the C type of x, and false where x is not an integer operand
-// there.
-//
-// The type of a C expression follows from its operands' types alone, so nothing
-// here evaluates anything. That is what lets a conditional expression ask for
-// the type of the arm it did not take, which decides what the arm it did take
-// converts to.
+// there. Nothing here evaluates x, which is what lets a conditional
+// expression ask for the type of the arm it did not take.
 func (c *checker) cTypeOf(x ast.Expr) (cType, bool) {
+	if got, asked := c.ctypes[x]; asked {
+		return got.t, got.known
+	}
+	t, known := c.nodeCType(x)
+	c.ctypes[x] = ctypeResult{t: t, known: known}
+	return t, known
+}
+
+func (c *checker) nodeCType(x ast.Expr) (cType, bool) {
 	switch x := x.(type) {
 	case *ast.IntLit:
 		return literalCType(x), true
@@ -122,13 +144,10 @@ func (c *checker) cTypeOf(x ast.Expr) (cType, bool) {
 	}
 }
 
-// literalCType gives an integer literal the first type from the list C searches
-// for its spelling: the signed types alone for a decimal constant, and the
-// unsigned ones interleaved for a hexadecimal one.
-//
-// The value is never negative — a literal carries no sign, and the lexer
-// refuses one past what a signed 64-bit integer holds — so the search runs
-// upwards from int and stops at long long.
+// literalCType gives an integer literal the first type from the list C
+// searches for its spelling: the signed types alone for a decimal constant,
+// the unsigned ones interleaved for a hexadecimal one. The value is never
+// negative, since a literal carries no sign, so the search runs upward.
 func literalCType(x *ast.IntLit) cType {
 	switch {
 	case x.Value <= math.MaxInt32:

@@ -1,6 +1,6 @@
 package ast
 
-import "strconv"
+import "github.com/greg2010/ic11c/internal/source"
 
 // ScalarKind names a built-in scalar type keyword. long long, bool, and double are
 // distinct for type checking and share one machine representation; dev names a
@@ -17,7 +17,21 @@ const (
 
 var scalarKindNames = [...]string{Int: "long long", Bool: "bool", Double: "double", Dev: "dev", Void: "void"}
 
-func (k ScalarKind) String() string { return enumName(scalarKindNames[:], uint8(k), "ScalarKind") }
+func (k ScalarKind) String() string {
+	return source.EnumName(scalarKindNames[:], int(k), "ScalarKind")
+}
+
+// ScalarKinds lists every scalar type MicroC has, in declaration order.
+//
+// It exists so a caller holding the closed set of type spellings reads the
+// enumeration rather than re-listing it.
+func ScalarKinds() []ScalarKind {
+	kinds := make([]ScalarKind, len(scalarKindNames))
+	for i := range scalarKindNames {
+		kinds[i] = ScalarKind(i)
+	}
+	return kinds
+}
 
 // UnaryOp is a prefix operator that is not an increment or decrement.
 type UnaryOp uint8
@@ -40,7 +54,7 @@ var unaryOpNames = [...]string{
 	Deref:      "*",
 }
 
-func (op UnaryOp) String() string { return enumName(unaryOpNames[:], uint8(op), "UnaryOp") }
+func (op UnaryOp) String() string { return source.EnumName(unaryOpNames[:], int(op), "UnaryOp") }
 
 // IncDecOp distinguishes ++ from --. Whether it applies before or after the
 // operand is recorded on [IncDecExpr].
@@ -53,7 +67,7 @@ const (
 
 var incDecOpNames = [...]string{Inc: "++", Dec: "--"}
 
-func (op IncDecOp) String() string { return enumName(incDecOpNames[:], uint8(op), "IncDecOp") }
+func (op IncDecOp) String() string { return source.EnumName(incDecOpNames[:], int(op), "IncDecOp") }
 
 // BinaryOp is an infix operator. Every MicroC binary operator is left
 // associative.
@@ -101,7 +115,7 @@ var binaryOpNames = [...]string{
 	LogicalOr:  "||",
 }
 
-func (op BinaryOp) String() string { return enumName(binaryOpNames[:], uint8(op), "BinaryOp") }
+func (op BinaryOp) String() string { return source.EnumName(binaryOpNames[:], int(op), "BinaryOp") }
 
 // AssignOp is a plain or compound assignment operator.
 type AssignOp uint8
@@ -134,11 +148,4 @@ var assignOpNames = [...]string{
 	XorAssign: "^=",
 }
 
-func (op AssignOp) String() string { return enumName(assignOpNames[:], uint8(op), "AssignOp") }
-
-func enumName(names []string, v uint8, typeName string) string {
-	if int(v) < len(names) && names[v] != "" {
-		return names[v]
-	}
-	return typeName + "(" + strconv.Itoa(int(v)) + ")"
-}
+func (op AssignOp) String() string { return source.EnumName(assignOpNames[:], int(op), "AssignOp") }

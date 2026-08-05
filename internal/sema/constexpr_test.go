@@ -170,6 +170,53 @@ void main(void) { __ic_store(d0, Setting, k); }
 	}
 }
 
+// TestAConstexprWithoutAValueIsNamedWhereItIsUsed covers what such a
+// declaration costs beyond its own diagnostic.
+//
+// The declaration is rejected where it stands, and the name it introduces stays
+// in scope. A position that requires a constant expression has to say why this
+// one carries none, and neither thing a reader would otherwise be told is true:
+// the object is constexpr, and it holds no value to fold.
+func TestAConstexprWithoutAValueIsNamedWhereItIsUsed(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "in an array bound",
+			src: `long long g;
+constexpr long long k = g;
+void main(void) {
+    long long a[/*!*/k];
+    a[0] = 1;
+    __ic_store(d0, Setting, a[0]);
+}
+`,
+			want: "an array bound must be a constant expression: 'k' is constexpr but its initializer is not constant",
+		},
+		{
+			name: "in a case label",
+			src: `long long g;
+constexpr long long k = g;
+void main(void) {
+    switch (g) {
+    case /*!*/k:
+        __ic_store(d0, On, 1);
+        break;
+    }
+}
+`,
+			want: "a case label must be a constant expression: 'k' is constexpr but its initializer is not constant",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expectDiagnosticAt(t, tt.src, tt.want)
+		})
+	}
+}
+
 // TestIntegerConstantExpressionRefusesADouble covers the one shape C admits a
 // double into a constant expression of integer type: a floating literal that a
 // cast converts. Anything else computes the bound or the label from a value the

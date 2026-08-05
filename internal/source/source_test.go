@@ -1,6 +1,8 @@
 package source_test
 
 import (
+	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/greg2010/ic11c/internal/source"
@@ -80,6 +82,9 @@ func TestLineMapOffset(t *testing.T) {
 		{name: "first byte", line: 1, column: 1, want: 0},
 		{name: "second line", line: 2, column: 1, want: 18},
 		{name: "into the second line", line: 2, column: 5, want: 22},
+		// The last line and the first line past it, so the bound is checked
+		// where it sits rather than only from far away.
+		{name: "the line after the last", line: 5, column: 1, want: 0},
 		{name: "line past the end", line: 99, column: 1, want: 0},
 		{name: "line zero", line: 0, column: 1, want: 0},
 		{name: "column zero", line: 2, column: 0, want: 0},
@@ -133,6 +138,59 @@ func TestLineMapPosition(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.lines.Position(tt.file, tt.line, tt.column); got != tt.want {
 				t.Errorf("Position(%q, %d, %d) = %+v, want %+v", tt.file, tt.line, tt.column, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSeverityString covers how a severity outside the two declared
+// constants renders: as something a reader recognizes as missing, not as one
+// of the two real severities.
+func TestSeverityString(t *testing.T) {
+	tests := []struct {
+		name string
+		sev  source.Severity
+		want string
+	}{
+		{name: "error", sev: source.Error, want: "error"},
+		{name: "warning", sev: source.Warning, want: "warning"},
+		{name: "the value just past the last one declared", sev: source.Warning + 1, want: "Severity(2)"},
+		{name: "far past the last one declared", sev: source.Severity(200), want: "Severity(200)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.sev.String(); got != tt.want {
+				t.Errorf("String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDiagnosticListErrorCountsTheRest covers what a list renders as when it is
+// returned as an error, which is one message and a count of the others. The
+// count is where the three arms differ, so each is checked at the length that
+// selects it and the singular is checked against the plural on either side.
+func TestDiagnosticListErrorCountsTheRest(t *testing.T) {
+	pos := source.Position{File: "t.c", Line: 1, Column: 1}
+
+	tests := []struct {
+		name string
+		n    int
+		want string
+	}{
+		{name: "empty", n: 0, want: "no errors"},
+		{name: "one", n: 1, want: "t.c:1:1: diagnostic 0"},
+		{name: "two", n: 2, want: "t.c:1:1: diagnostic 0 (and 1 more)"},
+		{name: "three", n: 3, want: "t.c:1:1: diagnostic 0 (and 2 more)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var l source.DiagnosticList
+			for i := range tt.n {
+				l.Addf(pos, "diagnostic %d", i)
+			}
+			if got := l.Error(); got != tt.want {
+				t.Errorf("Error() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -225,9 +283,56 @@ func TestDiagnosticList(t *testing.T) {
 	}
 }
 
-// TestSeveritySeparatesWarningsFromErrors covers what the two severities decide:
-// whether a stage stops and whether the command exits non-zero. A list of
-// warnings alone is not an error.
+// TestSortKeepsTheOrderOfDiagnosticsAtOnePosition covers what position
+// ordering alone does not decide: two diagnostics at the same line, column,
+// and offset compare equal, so only report order distinguishes them. An
+// unstable sort would let that order vary between runs.
+func TestSortKeepsTheOrderOfDiagnosticsAtOnePosition(t *testing.T) {
+	// An unstable sort reorders equal elements only once it stops running the
+	// insertion sort it uses on a short run, so the property is checked over a
+	// range of lengths rather than at one.
+	for _, n := range []int{2, 8, 13, 16, 32, 64} {
+		t.Run(strconv.Itoa(n), func(t *testing.T) {
+			second := source.Position{File: "t.c", Offset: 30, Line: 5, Column: 1}
+			first := source.Position{File: "t.c", Offset: 7, Line: 2, Column: 3}
+
+			var l source.DiagnosticList
+			for i := range n {
+				pos := first
+				if i%2 == 1 {
+					pos = second
+				}
+				// Zero padded so that the reported order and the lexical order
+				// of the messages are the same order.
+				l.Addf(pos, "reported %03d", i)
+			}
+			l.Sort()
+
+			if len(l) != n {
+				t.Fatalf("Sort() left %d diagnostics, want %d", len(l), n)
+			}
+			for i, want := range []source.Position{first, second} {
+				var got []string
+				for _, d := range l {
+					if d.Pos == want {
+						got = append(got, d.Msg)
+					}
+				}
+				if !slices.IsSorted(got) {
+					t.Errorf("the diagnostics at %s are ordered %v, want the order they were reported in", want, got)
+				}
+				if i == 0 && len(l) > 0 && l[0].Pos != first {
+					t.Errorf("Sort() put %s first, want %s", l[0].Pos, first)
+				}
+			}
+		})
+	}
+}
+
+// TestSeveritySeparatesWarningsFromErrors covers what the two severities
+// decide: whether a stage stops, and whether the command exits non-zero. A
+// list of warnings alone is not an error, and the overflow note itself is
+// counted at neither severity.
 func TestSeveritySeparatesWarningsFromErrors(t *testing.T) {
 	pos := source.Position{File: "t.c", Line: 3, Column: 1}
 
@@ -273,6 +378,41 @@ func TestSeveritySeparatesWarningsFromErrors(t *testing.T) {
 			wantErrors: 1,
 			wantErr:    true,
 			wantText:   "t.c:3:1: warning: retired\nt.c:3:1: broken",
+		},
+		{
+			name: "an error list cut short",
+			build: func() source.DiagnosticList {
+				var l source.DiagnosticList
+				l.Addf(pos, "broken")
+				l.Addf(pos, "also broken")
+				l.Overflow(pos, source.Error)
+				return l
+			},
+			wantErrors: 2,
+			wantErr:    true,
+			wantText:   "t.c:3:1: broken\nt.c:3:1: also broken\nt.c:3:1: too many errors",
+		},
+		{
+			// The note carries the severity of the list it closes, so an error
+			// note reaches the counts that reject. Nothing but the note is a
+			// reason to reject.
+			name: "the note alone",
+			build: func() source.DiagnosticList {
+				var l source.DiagnosticList
+				l.Overflow(pos, source.Error)
+				return l
+			},
+			wantText: "t.c:3:1: too many errors",
+		},
+		{
+			name: "a warning list cut short",
+			build: func() source.DiagnosticList {
+				var l source.DiagnosticList
+				l.Warnf(pos, "retired")
+				l.Overflow(pos, source.Warning)
+				return l
+			},
+			wantText: "t.c:3:1: warning: retired\nt.c:3:1: warning: too many warnings",
 		},
 	}
 	for _, tt := range tests {

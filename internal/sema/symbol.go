@@ -1,27 +1,19 @@
 package sema
 
 import (
-	"strconv"
-
 	"github.com/greg2010/ic11c/internal/ast"
 	"github.com/greg2010/ic11c/internal/source"
 )
 
-// SymbolKind distinguishes what a declared name denotes. It also carries the
-// storage class, since MicroC has exactly one per kind: globals and arrays live
-// in the data region, locals and parameters in a frame or a register.
+// SymbolKind distinguishes what a declared name denotes.
 type SymbolKind uint8
 
 const (
 	// GlobalVar is a variable declared at file scope. It keeps its value
 	// across ticks.
 	GlobalVar SymbolKind = iota
-	// LocalVar is a variable declared in a block.
 	LocalVar
-	// ParamVar is a function parameter. Parameters share the function body's
-	// scope, so a local redeclaring one conflicts.
 	ParamVar
-	// FuncName is a function.
 	FuncName
 )
 
@@ -32,12 +24,7 @@ var symbolKindNames = [...]string{
 	FuncName:  "function",
 }
 
-func (k SymbolKind) String() string {
-	if int(k) < len(symbolKindNames) && symbolKindNames[k] != "" {
-		return symbolKindNames[k]
-	}
-	return "SymbolKind(" + strconv.Itoa(int(k)) + ")"
-}
+func (k SymbolKind) String() string { return source.EnumName(symbolKindNames[:], int(k), "SymbolKind") }
 
 // Symbol is one declared name. Every [ast.Ident] that resolved appears in
 // [Program.Uses] mapped to the Symbol it named.
@@ -47,8 +34,7 @@ type Symbol struct {
 	// Type is the declared type, with an array parameter already decayed to a
 	// pointer. It is Invalid for a function, whose signature is on Func.
 	Type *Type
-	// Pos is where the name was written.
-	Pos source.Position
+	Pos  source.Position
 	// Decl is the [ast.VarDecl], [ast.Param], or [ast.FuncDecl] that declared
 	// the name.
 	Decl ast.Node
@@ -59,8 +45,7 @@ type Symbol struct {
 	// const-qualified.
 	Constexpr bool
 	// Value is the folded value of a constexpr scalar initialized with a
-	// constant expression, and nil otherwise. It is what makes "case kIdle:"
-	// work.
+	// constant expression, and nil otherwise.
 	Value *Value
 	// Device is the pin a dev object names, and nil for every other symbol and
 	// for a dev parameter, whose pin the call site supplies.
@@ -75,15 +60,20 @@ type Symbol struct {
 	// assignment naming a different object can be rejected.
 	obj    object
 	objSet bool
+
+	// hashName and hashKnown record the string an object's initializer hashed,
+	// if any — what makes a batch operand naming it checkable. hashVaries
+	// records a later write, after which the value at a use is undecided; all
+	// three are final only once the file is fully checked.
+	hashName   string
+	hashKnown  bool
+	hashVaries bool
 }
 
-// InDataRegion reports whether the object occupies one of the 512 memory slots
-// rather than a register.
-//
-// It decides two things that have to agree: which locals definite assignment
-// covers, and which storage IR generation has to write a zero into. The entry
-// prologue zeroes every slot before anything else runs, so an object here reads
-// as zero before its first write; a register has nothing that zeroes it.
+// InDataRegion reports whether the object occupies one of the 512 memory
+// slots rather than a register. The entry prologue zeroes every slot before
+// anything else runs, so an object here reads as zero before its first
+// write; a register has nothing that zeroes it.
 func (s *Symbol) InDataRegion() bool {
 	switch s.Kind {
 	case GlobalVar:
@@ -127,29 +117,97 @@ type object struct {
 	call *ast.CallExpr
 }
 
-// scope is one name lookup level: file scope, a function body, or a block.
-type scope struct {
-	parent *scope
-	names  map[string]*Symbol
+// scopes holds the name lookup levels one analysis has open, outermost
+// first: the universe, file scope, a function body, and a block for each one
+// nested inside it. A name resolves through one map lookup rather than a
+// walk outward through levels, keeping lookup cost independent of depth.
+type scopes struct {
+	// bound holds every symbol a name is currently bound to, innermost last. A
+	// name nothing declared is absent rather than present and empty.
+	bound map[string][]binding
+	// opened holds the names each open level bound, in the order it bound them,
+	// so closing a level unbinds exactly what it added.
+	opened [][]string
 }
 
-func newScope(parent *scope) *scope {
-	return &scope{parent: parent, names: make(map[string]*Symbol)}
+// binding is one symbol a name is bound to, and the level that bound it. The
+// level is what tells a redeclaration in the innermost scope from a
+// declaration that shadows an outer one.
+type binding struct {
+	sym   *Symbol
+	depth int
 }
 
-// lookup finds name in this scope or any enclosing one, so an inner declaration
-// shadows an outer one.
-func (s *scope) lookup(name string) *Symbol {
-	for cur := s; cur != nil; cur = cur.parent {
-		if sym, ok := cur.names[name]; ok {
-			return sym
+// newScopes binds predeclared in the universe and opens file scope inside
+// it. Neither is ever closed, and they are two levels rather than one: a
+// declaration taking a predeclared name shadows it rather than colliding,
+// which leaves the reserved-name rule the only thing that refuses one.
+func newScopes(predeclared []*Symbol) *scopes {
+	s := &scopes{bound: make(map[string][]binding), opened: make([][]string, 1)}
+	for _, sym := range predeclared {
+		s.insert(sym)
+	}
+	s.push()
+	return s
+}
+
+// push opens a level and pop closes it. Every caller pairs them.
+func (s *scopes) push() { s.opened = append(s.opened, nil) }
+
+func (s *scopes) pop() {
+	last := len(s.opened) - 1
+	for _, name := range s.opened[last] {
+		// The level being closed is the innermost, so its bindings are the last
+		// ones for their names whatever order they were added in.
+		rest := s.bound[name][:len(s.bound[name])-1]
+		if len(rest) == 0 {
+			delete(s.bound, name)
+			continue
 		}
+		s.bound[name] = rest
+	}
+	s.opened = s.opened[:last]
+}
+
+// lookup finds name in the innermost level that bound it, so an inner
+// declaration shadows an outer one.
+func (s *scopes) lookup(name string) *Symbol {
+	if b, declared := s.innermost(name); declared {
+		return b.sym
 	}
 	return nil
 }
 
-// lookupLocal finds name declared in this scope only, which is what a
-// redeclaration conflict is about.
-func (s *scope) lookupLocal(name string) *Symbol { return s.names[name] }
+// lookupLocal finds name bound in the innermost open level alone, which is what
+// a redeclaration conflict is about.
+func (s *scopes) lookupLocal(name string) *Symbol {
+	if b, declared := s.innermost(name); declared && b.depth == len(s.opened)-1 {
+		return b.sym
+	}
+	return nil
+}
 
-func (s *scope) insert(sym *Symbol) { s.names[sym.Name] = sym }
+func (s *scopes) innermost(name string) (binding, bool) {
+	bound := s.bound[name]
+	if len(bound) == 0 {
+		return binding{}, false
+	}
+	return bound[len(bound)-1], true
+}
+
+func (s *scopes) insert(sym *Symbol) {
+	depth := len(s.opened) - 1
+	s.bound[sym.Name] = append(s.bound[sym.Name], binding{sym: sym, depth: depth})
+	s.opened[depth] = append(s.opened[depth], sym.Name)
+}
+
+// declare adds sym to the current scope, reporting a name already declared
+// there. The first declaration keeps the name, so later uses resolve to
+// something rather than cascading into "undeclared".
+func (c *checker) declare(sym *Symbol) {
+	if prev := c.scope.lookupLocal(sym.Name); prev != nil {
+		c.errorf(sym.Pos, "'%s' is already declared at %s", sym.Name, prev.Pos)
+		return
+	}
+	c.scope.insert(sym)
+}

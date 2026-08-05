@@ -62,6 +62,12 @@ func (c *checker) ident(x *ast.Ident) *Type {
 			c.errorf(x.NamePos, "the intrinsic '%s' may only be called", x.Name)
 		case isReservedName(x.Name):
 			c.errorf(x.NamePos, "'%s' is not an intrinsic, and names beginning '%s' are reserved for them", x.Name, reservedPrefix)
+		case isDevicePinSpelling(x.Name):
+			// The spelling resolves without scope wherever a device belongs, so
+			// nothing declares it and nothing may. Saying it is undeclared names
+			// the one repair the language refuses.
+			c.errorf(x.NamePos, "'%s' names a device pin rather than a value, and no cast turns one into a number; "+
+				"a device stands only in a device position, which the chip resolves when the line is assembled", x.Name)
 		default:
 			c.errorf(x.NamePos, "undeclared name '%s'", x.Name)
 		}
@@ -99,22 +105,44 @@ func (c *checker) unary(x *ast.UnaryExpr) *Type {
 	case ast.AddrOf:
 		return c.addrOf(x)
 	case ast.Deref:
-		t := decay(c.expr(x.X))
-		if t.Kind() == Invalid {
-			return invalidType
-		}
-		if t.Kind() != Pointer {
-			c.errorf(x.OpPos, "the operand of unary '*' must be a pointer, found %s", t)
-			return invalidType
-		}
-		return t.Elem()
+		return c.deref(x)
 	default:
 		return invalidType
 	}
 }
 
+// deref checks unary '*'. Where it stands directly over a '&', '*&E' reads
+// E without ever forming an address, so the one-past-the-end index
+// [checker.checkIndexBound] allows under '&' is taken away again here.
+func (c *checker) deref(x *ast.UnaryExpr) *Type {
+	outer := c.dereferenced
+	if x == c.addressed {
+		c.dereferenced = nil
+	} else {
+		c.dereferenced = x.X
+	}
+	t := decay(c.expr(x.X))
+	c.dereferenced = outer
+	if t.Kind() == Invalid {
+		return invalidType
+	}
+	if t.Kind() != Pointer {
+		c.errorf(x.OpPos, "the operand of unary '*' must be a pointer, found %s", t)
+		return invalidType
+	}
+	c.checkDerefSlot(x)
+	return t.Elem()
+}
+
 func (c *checker) addrOf(x *ast.UnaryExpr) *Type {
+	outer := c.addressed
+	if x == c.dereferenced {
+		c.addressed = nil
+	} else {
+		c.addressed = x.X
+	}
 	t := c.expr(x.X)
+	c.addressed = outer
 	if t.Kind() == Invalid {
 		return invalidType
 	}
@@ -130,12 +158,15 @@ func (c *checker) addrOf(x *ast.UnaryExpr) *Type {
 		c.errorf(x.OpPos, "the operand of unary '&' must name an object")
 		return invalidType
 	}
-	// Naming an object under '&' is what moves it into the data region, which
-	// both definite assignment and the zeroing IR generation emits key on. Only
-	// a name does: '&p[i]' is the arithmetic 'p + i' and '&*p' is p, both of
-	// which read the pointer rather than address it.
+	// Only a name moves an object into the data region: '&p[i]' is the
+	// arithmetic 'p + i' and '&*p' is p, both of which read the pointer
+	// rather than address it.
 	if id, named := x.X.(*ast.Ident); named {
 		if sym := c.prog.Uses[id]; sym != nil {
+			if sym.Constexpr {
+				c.errorf(x.OpPos, "the address of '%s' is not expressible in MicroC; a constexpr object occupies no storage, since every reference to it becomes its value", id.Name)
+				return invalidType
+			}
 			sym.Addressed = true
 		}
 	}
@@ -150,6 +181,7 @@ func (c *checker) incDec(x *ast.IncDecExpr) *Type {
 	if !c.assignTarget(x.X, t, "the operand of '"+x.Op.String()+"'") {
 		return invalidType
 	}
+	c.noteHashOverwritten(x.X)
 	switch unqual(t).Kind() {
 	case Int, Double, Pointer:
 		return unqual(t)
@@ -204,11 +236,13 @@ func (c *checker) additive(x *ast.BinaryExpr) *Type {
 		if !c.requireInt(rhs, x.Y, "the right operand of '"+x.Op.String()+"'") {
 			return invalidType
 		}
+		c.checkPointerStep(x)
 		return lhs
 	case !lp && rp && x.Op == ast.Add:
 		if !c.requireInt(lhs, x.X, "the left operand of '+'") {
 			return invalidType
 		}
+		c.checkPointerStep(x)
 		return rhs
 	case lp && rp && x.Op == ast.Sub:
 		c.sameObject(x.X, x.Y, x.OpPos, "the operands of '-'")
@@ -290,8 +324,9 @@ func (c *checker) assignExpr(x *ast.AssignExpr) *Type {
 	if !c.assignTarget(x.Target, target, "the target of '"+x.Op.String()+"'") {
 		return invalidType
 	}
+	c.noteHashOverwritten(x.Target)
 	if x.Op == ast.Assign {
-		c.assign(target, value, x.Value, "an assignment")
+		c.checkAssignable(target, value, x.Value, "an assignment")
 		c.trackPointerAssign(x.Target, x.Value)
 		return unqual(target)
 	}
@@ -306,11 +341,9 @@ var compoundOnlyInt = map[ast.AssignOp]bool{
 }
 
 // compoundAssign checks "t op= v", which means "t = t op v" with t evaluated
-// once. Only '+' and '-' apply to a pointer target.
-//
-// The result is the target's own type, so nothing narrows: a double target
-// takes a long long right operand, which widens, and a long long target does not take a
-// double one, which would have to truncate where no cast says so.
+// once. Only '+' and '-' apply to a pointer target. The result is the
+// target's own type: a double target takes a widening long long right
+// operand, but a long long target never takes a double one implicitly.
 func (c *checker) compoundAssign(x *ast.AssignExpr, target, value *Type) *Type {
 	op := x.Op.String()
 	if unqual(decay(target)).Kind() == Pointer {
@@ -372,6 +405,7 @@ func (c *checker) index(x *ast.IndexExpr) *Type {
 		c.errorf(x.Lbrack, "cannot index %s; only an array or a pointer may be indexed", base)
 		return invalidType
 	}
+	c.checkIndexBound(x)
 	return base.Elem()
 }
 
@@ -416,7 +450,7 @@ func (c *checker) call(x *ast.CallExpr) *Type {
 		}
 		t := c.expr(arg)
 		if i < len(fn.Params) {
-			c.assign(fn.Params[i].Type, t, arg, "an argument to '"+fn.Name+"'")
+			c.checkAssignable(fn.Params[i].Type, t, arg, "an argument to '"+fn.Name+"'")
 		}
 	}
 	fn.called = true
@@ -463,13 +497,11 @@ func (c *checker) cast(x *ast.CastExpr) *Type {
 	return target
 }
 
-// assign checks that a value of type src may be used where dst is wanted, and
-// records the conversion when one happens.
-//
-// It reports whether the value may be used there. An operand analysis already
-// rejected answers false and says nothing more, which is what keeps a caller
-// from checking it a second way and reporting the same mistake twice.
-func (c *checker) assign(dst, src *Type, x ast.Expr, what string) bool {
+// checkAssignable reports a value of type src used where dst is wanted,
+// records the conversion where one happens, and says whether the value may
+// be used there. It is [assignableTo] with a diagnostic behind it: an
+// operand analysis already rejected answers false and says nothing more.
+func (c *checker) checkAssignable(dst, src *Type, x ast.Expr, what string) bool {
 	if dst.Kind() == Invalid || src.Kind() == Invalid {
 		return false
 	}
@@ -496,13 +528,10 @@ func (c *checker) recordConversion(dst, src *Type, x ast.Expr) {
 	}
 }
 
-// condition checks an expression used for its truth: the controlling clause of
-// if, while, do, for, and '?:', and the operands of '!', '&&', and '||'. An long long
-// converts to bool there, which normalizes it.
-//
-// A double does not. Every value a chip reads is fractional, and a test against
-// zero is almost never the comparison such a value wanted; requiring one to be
-// written is what keeps a tolerance from being spelled by accident.
+// condition checks an expression used for its truth: the controlling clause
+// of if, while, do, for, and '?:', and the operands of '!', '&&', and '||'.
+// A long long converts to bool there, but a double does not: every chip
+// value is fractional, so a bare test against zero is rarely what was meant.
 func (c *checker) condition(x ast.Expr, t *Type, what string) {
 	switch unqual(decay(t)).Kind() {
 	case Invalid, Bool:

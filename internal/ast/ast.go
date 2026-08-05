@@ -1,15 +1,7 @@
 // Package ast defines the MicroC syntax tree produced by the parser.
 //
-// Every node carries the source position of the token that introduces it.
-// Positions are threaded through semantic analysis into LLVM debug locations,
-// so a rejection raised late — an over-budget report, a pointer-restriction
-// violation, an operand validation failure — can still name a user source line.
-//
-// Types in the tree are syntactic. They record what the source wrote, not what
-// it means; resolving them is semantic analysis's job. For the same reason the
-// tree admits constructs MicroC rejects: [StringLit] exists because
-// __ic_hash takes one, and restricting where a string may appear is a semantic
-// question, not a syntactic one.
+// Every node carries a source position, threaded through to LLVM debug
+// locations so a late rejection can still name a source line.
 package ast
 
 import "github.com/greg2010/ic11c/internal/source"
@@ -69,10 +61,9 @@ type PointerType struct {
 }
 
 // ArrayType is an array of Elem. Size is nil for an unsized array, which the
-// grammar admits only as a parameter that decays to a pointer. Pos reports the
-// '[', not the start of the whole type.
-//
-// Arrays are one-dimensional, so Elem is never itself an ArrayType.
+// grammar admits only as a parameter that decays to a pointer. Pos reports
+// the '[', not the start of the whole type. Arrays are one-dimensional, so
+// Elem is never itself an ArrayType.
 type ArrayType struct {
 	Lbrack source.Position
 	Elem   Type
@@ -110,21 +101,36 @@ type FuncDecl struct {
 	Body    *BlockStmt
 }
 
+// PrefabAttr is the attribute a dev declaration uses to state which prefab
+// the pin it names is wired to. What a pin reaches is decided when the
+// chip is placed in the world, so this is a promise about the world, not
+// a program fact: nothing downstream of analysis reads it.
+type PrefabAttr struct {
+	// At is where the attribute begins: the '[[' of the specifier it leads, or
+	// its own first token where a comma separated list wrote it after another.
+	At source.Position
+	// Name is the prefab name the attribute's string literal spelled, and
+	// NamePos where that literal was written.
+	Name    string
+	NamePos source.Position
+}
+
+func (a *PrefabAttr) Pos() source.Position { return a.At }
+
 // VarDecl declares one variable. MicroC admits a single declarator per
-// declaration, so the type and the initializer sit directly on the node. It
-// appears both at file scope and as a statement inside a block.
-//
-// Const and Constexpr record the specifiers as written, and both are set where
-// the declaration wrote both. Constexpr carries the const of its own accord;
-// what it adds is that the object names a constant expression.
+// declaration, so the type and initializer sit directly on the node.
 type VarDecl struct {
-	DeclPos   source.Position
-	Const     bool
+	DeclPos source.Position
+	Const   bool
+	// Constexpr implies Const and adds that the object names a constant
+	// expression.
 	Constexpr bool
-	Type      Type
-	Name      string
-	NamePos   source.Position
-	Init      Expr
+	// Prefab is the attribute the declaration led with, or nil for none.
+	Prefab  *PrefabAttr
+	Type    Type
+	Name    string
+	NamePos source.Position
+	Init    Expr
 }
 
 // BadDecl marks source the parser could not read as a declaration. From is the
@@ -201,13 +207,10 @@ type SwitchStmt struct {
 	Cases     []*CaseClause
 }
 
-// CaseClause is one arm of a [SwitchStmt]. Value is nil for the default arm.
-// Body holds the statements up to the next arm.
-//
-// The parser records arms as written. That a case value is constant, that
-// values are distinct, and that a non-empty arm does not fall out of its body
-// are all semantic questions, since the first two need constant evaluation and
-// the third needs reachability.
+// CaseClause is one arm of a [SwitchStmt]. Value is nil for the default
+// arm; Body holds the statements up to the next arm. The parser records
+// arms as written — constant-ness, distinctness, and fallthrough are all
+// semantic questions.
 type CaseClause struct {
 	CasePos source.Position
 	Value   Expr
@@ -272,14 +275,10 @@ type Ident struct {
 	Name    string
 }
 
-// IntLit is a decimal or hexadecimal integer literal. Value is the decoded
-// value, and Hex says which of the two spellings wrote it.
-//
-// Which one it was is kept because C's type for an integer constant depends on
-// it: a decimal constant searches the signed types alone, where a hexadecimal
-// one may land on an unsigned type. That is the whole difference between
-// 2147483648 and 0x80000000, which denote the same number and negate to
-// different ones.
+// IntLit is a decimal or hexadecimal integer literal. Value is the
+// decoded value, and Hex says which spelling wrote it: C's type for an
+// integer constant depends on it, since a decimal constant searches the
+// signed types alone where a hexadecimal one may land on unsigned.
 type IntLit struct {
 	ValuePos source.Position
 	Value    int64

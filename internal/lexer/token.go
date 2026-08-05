@@ -1,10 +1,6 @@
 package lexer
 
-import (
-	"strconv"
-
-	"github.com/greg2010/ic11c/internal/source"
-)
+import "github.com/greg2010/ic11c/internal/source"
 
 // Kind classifies a token.
 type Kind uint8
@@ -63,6 +59,12 @@ const (
 	Unsigned
 	Volatile
 
+	// Reserved is a C23 keyword MicroC names no construct for. The keywords
+	// above each get their own kind because a diagnostic has something
+	// specific to say about each; these share one kind because the
+	// diagnostic only needs to quote the spelling out of the token.
+	Reserved
+
 	Add
 	Sub
 	Mul
@@ -108,6 +110,7 @@ const (
 	Comma
 	Semicolon
 	Colon
+	Scope
 	Question
 	Period
 	Arrow
@@ -165,6 +168,7 @@ var kindNames = [...]string{
 	Union:    "'union'",
 	Unsigned: "'unsigned'",
 	Volatile: "'volatile'",
+	Reserved: "a reserved word",
 
 	Add:   "'+'",
 	Sub:   "'-'",
@@ -211,6 +215,7 @@ var kindNames = [...]string{
 	Comma:     "','",
 	Semicolon: "';'",
 	Colon:     "':'",
+	Scope:     "'::'",
 	Question:  "'?'",
 	Period:    "'.'",
 	Arrow:     "'->'",
@@ -219,12 +224,7 @@ var kindNames = [...]string{
 
 // String renders k the way a diagnostic should name it: operator and keyword
 // spellings come back quoted, everything else as a noun phrase.
-func (k Kind) String() string {
-	if int(k) < len(kindNames) && kindNames[k] != "" {
-		return kindNames[k]
-	}
-	return "token(" + strconv.Itoa(int(k)) + ")"
-}
+func (k Kind) String() string { return source.EnumName(kindNames[:], int(k), "token") }
 
 var keywords = map[string]Kind{
 	"bool":      Bool,
@@ -267,6 +267,31 @@ var keywords = map[string]Kind{
 	"union":    Union,
 	"unsigned": Unsigned,
 	"volatile": Volatile,
+
+	// The rest of C23's keywords. MicroC spells nothing with them, but C
+	// reserves every one, so a program declaring something named 'nullptr' is
+	// not the valid C23 translation unit every MicroC program is.
+	"_Alignas":       Reserved,
+	"_Alignof":       Reserved,
+	"_Atomic":        Reserved,
+	"_BitInt":        Reserved,
+	"_Bool":          Reserved,
+	"_Complex":       Reserved,
+	"_Decimal128":    Reserved,
+	"_Decimal32":     Reserved,
+	"_Decimal64":     Reserved,
+	"_Generic":       Reserved,
+	"_Imaginary":     Reserved,
+	"_Noreturn":      Reserved,
+	"_Static_assert": Reserved,
+	"_Thread_local":  Reserved,
+	"alignas":        Reserved,
+	"alignof":        Reserved,
+	"nullptr":        Reserved,
+	"static_assert":  Reserved,
+	"thread_local":   Reserved,
+	"typeof":         Reserved,
+	"typeof_unqual":  Reserved,
 }
 
 // operators is ordered longest spelling first so that a linear prefix scan is a
@@ -298,6 +323,10 @@ var operators = []struct {
 	{"&=", AndAssign},
 	{"|=", OrAssign},
 	{"^=", XorAssign},
+	// C23's attribute separator, and the only place two colons meet: no label
+	// exists to be followed by one, and a conditional's colon is followed by an
+	// expression.
+	{"::", Scope},
 
 	{"+", Add},
 	{"-", Sub},
@@ -326,11 +355,8 @@ var operators = []struct {
 }
 
 // Token is one lexical element together with where it was written.
-//
-// Int carries the decoded value of an IntLit or CharLit, Float the decoded
-// value of a FloatLit, and Str the decoded bytes of a StringLit; each is zero
-// for every other kind. Text is always the raw source spelling, so a diagnostic
-// can quote what the programmer wrote.
+// Int carries the decoded value of an IntLit or CharLit, Float of a
+// FloatLit, and Str of a StringLit; each is zero for every other kind.
 type Token struct {
 	Kind  Kind
 	Pos   source.Position
@@ -341,9 +367,11 @@ type Token struct {
 }
 
 // Describe names the token for a diagnostic, quoting the actual spelling of an
-// identifier so the message points at something the programmer recognizes.
+// identifier so the message points at something the programmer recognizes. A
+// reserved word is quoted for the same reason: one kind stands for all of them,
+// so only the text says which was written.
 func (t Token) Describe() string {
-	if t.Kind == Ident {
+	if t.Kind == Ident || t.Kind == Reserved {
 		return "'" + t.Text + "'"
 	}
 	return t.Kind.String()

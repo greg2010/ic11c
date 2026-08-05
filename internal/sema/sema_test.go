@@ -2,8 +2,11 @@ package sema_test
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
+
+	"github.com/greg2010/ic11c/internal/source"
 )
 
 func TestAnalyzeAccepts(t *testing.T) {
@@ -158,16 +161,17 @@ void main(void) {
     __ic_store(db, On, 1);
     level = __ic_load_slot(d1, 0, Occupied);
     __ic_store_slot(d1, 1, OccupantHash, level);
-    long long prefab = __ic_hash("StructureWallLight");
+    long long prefab = __ic_hash("StructureStubFurnace");
+    long long storage = __ic_hash("StructureStubLocker");
     level = __ic_rand();
     __ic_store(d3, Setting, __ic_isnan(level));
     level = __ic_load_batch(prefab, Temperature, Average);
-    __ic_store_batch(prefab, On, 0);
-    level = __ic_load_batch_named(prefab, __ic_hash("north"), Setting, Sum);
-    __ic_store_batch_named(prefab, __ic_hash("north"), Open, 1);
+    __ic_store_batch(prefab, Setting, 0);
+    level = __ic_load_batch_named(prefab, __ic_hash("north"), Temperature, Sum);
+    __ic_store_batch_named(storage, __ic_hash("north"), On, 1);
     level = __ic_load_batch_slot(prefab, 0, Occupied, Maximum);
-    __ic_store_batch_slot(prefab, 0, Occupied, 1);
-    level = __ic_load_batch_named_slot(prefab, __ic_hash("north"), 0, Occupied, Minimum);
+    __ic_store_batch_slot(storage, 0, SlotType_Lock, 1);
+    level = __ic_load_batch_named_slot(prefab, __ic_hash("north"), 0, Occupied, BatchMode_Minimum);
     level = __ic_load_reagent(d2, Contents, prefab);
     if (__ic_device_present(d5)) {
         __ic_sleep(1);
@@ -929,7 +933,7 @@ void main(void) {}
 			src: `const long long k = (long long)1 /*!*/<< 60;
 void main(void) {}
 `,
-			want: "more than 53 significant bits",
+			want: "a left shift that reaches 2^53 answers with -2^53",
 		},
 		{
 			name: "division by zero in a constant expression",
@@ -1206,6 +1210,40 @@ void main(void) {
 `,
 			want: "a pointer to dev is not supported in MicroC",
 		},
+		// A parameter's array decays to a pointer, so these are the third and
+		// fourth spelling of the two above. Every spelling of a type has to be
+		// refused by the same rule, or the one that is not becomes the way to
+		// write it.
+		{
+			name: "a dev array parameter with no bound",
+			src: `void f(dev pins/*!*/[]) {
+}
+void main(void) {
+    __ic_yield();
+}
+`,
+			want: "an array element may not have type dev",
+		},
+		{
+			name: "a dev array parameter with a bound",
+			src: `void f(dev pins/*!*/[2]) {
+}
+void main(void) {
+    __ic_yield();
+}
+`,
+			want: "an array element may not have type dev",
+		},
+		{
+			name: "a void array parameter",
+			src: `void f(void pins/*!*/[]) {
+}
+void main(void) {
+    __ic_yield();
+}
+`,
+			want: "an array element may not have type void",
+		},
 		{
 			name: "the address of a dev object",
 			src: `const dev sensor = d0;
@@ -1227,6 +1265,35 @@ void main(void) {
 }
 `,
 			want: "the address of a dev is not expressible in MicroC",
+		},
+		{
+			name: "the address of a machine constant",
+			src: `void main(void) {
+    const double *p = /*!*/&pi;
+    __ic_store(d0, Setting, *p);
+}
+`,
+			want: "the address of 'pi' is not expressible in MicroC",
+		},
+		{
+			name: "the address of a constexpr global",
+			src: `constexpr double kHalf = 0.5;
+void main(void) {
+    const double *p = /*!*/&kHalf;
+    __ic_store(d0, Setting, *p);
+}
+`,
+			want: "the address of 'kHalf' is not expressible in MicroC",
+		},
+		{
+			name: "the address of a constexpr local",
+			src: `void main(void) {
+    constexpr double kHalf = 0.5;
+    const double *p = /*!*/&kHalf;
+    __ic_store(d0, Setting, *p);
+}
+`,
+			want: "the address of 'kHalf' is not expressible in MicroC",
 		},
 		{
 			name: "two devs compared",
@@ -1350,23 +1417,514 @@ func TestAnalyzeReportsOneErrorPerRootCause(t *testing.T) {
 	}
 }
 
-// TestAnalyzeCapsDiagnostics pins the point past which more messages are noise
-// rather than information.
-func TestAnalyzeCapsDiagnostics(t *testing.T) {
+// errorCap and warningCap are how many diagnostics of each severity analysis
+// reports before the rest are noise. They are written here rather than read
+// from the analyser because a cap the test derived from the code under test
+// would move with it.
+//
+// They are two constants because the analyser holds two budgets. A single one
+// would pass whatever the analyser did as long as the two stayed equal, which
+// is the property these tests exist to doubt.
+const (
+	errorCap   = 64
+	warningCap = 64
+)
+
+// undeclaredReadLines is n statements each naming something that does not
+// exist, which is n errors and nothing else.
+func undeclaredReadLines(n int) string {
 	var b strings.Builder
-	b.WriteString("void main(void) {\n")
-	for i := range 100 {
+	for i := range n {
 		fmt.Fprintf(&b, "    long long v%d = missing%d;\n", i, i)
 	}
-	b.WriteString("}\n")
+	return b.String()
+}
 
-	_, diags := analyze(t, b.String())
-	// The cap is 64 problems, followed by one message saying the rest were
-	// dropped.
-	if len(diags) != 65 {
-		t.Fatalf("got %d diagnostics, want the capped 65", len(diags))
+// undeclaredReads is [undeclaredReadLines] as a whole program.
+func undeclaredReads(n int) string {
+	return "void main(void) {\n" + undeclaredReadLines(n) + "}\n"
+}
+
+// deprecatedWrites is a program that writes a retired logic type n times, which
+// is n warnings and nothing else. tail is written into main after them.
+func deprecatedWrites(n int, tail string) string {
+	var b strings.Builder
+	b.WriteString("void main(void) {\n    long long z;\n")
+	for i := range n {
+		fmt.Fprintf(&b, "    __ic_store(d0, PlantHealth1, %d);\n", i)
 	}
-	if last := diags[len(diags)-1]; last.Msg != "too many errors" {
-		t.Errorf("last diagnostic is %q, want it to report the cap", last.Msg)
+	b.WriteString(tail)
+	b.WriteString("}\n")
+	return b.String()
+}
+
+// TestDiagnosticCapsAreCountedPerSeverity pins the point past which more
+// messages are noise, and that each severity reaches it on its own.
+//
+// The cap is there so a cascade of derived messages does not bury the first real
+// one, which is a reason that applies to errors and warnings apart rather than
+// to their sum. Counting them together let a program that says too much about
+// itself in warnings close the list with an error and be rejected for it, having
+// nothing wrong with it at all.
+//
+// Reaching a cap therefore adds a note and no diagnostic: a run that overflowed
+// reports exactly as many errors as one that filled the cap exactly, and closes
+// the list with the note the other does not carry.
+func TestDiagnosticCapsAreCountedPerSeverity(t *testing.T) {
+	tests := []struct {
+		name         string
+		src          string
+		wantErrors   int
+		wantWarnings int
+		// wantMarkers is the message each severity closes its own list with. A
+		// severity absent from it must carry no marker at all.
+		wantMarkers map[source.Severity]string
+	}{
+		{
+			name:       "errors filling the cap exactly",
+			src:        undeclaredReads(errorCap),
+			wantErrors: errorCap,
+		},
+		{
+			name:        "errors one past the cap",
+			src:         undeclaredReads(errorCap + 1),
+			wantErrors:  errorCap,
+			wantMarkers: map[source.Severity]string{source.Error: "too many errors"},
+		},
+		{
+			name:         "warnings filling the cap exactly",
+			src:          deprecatedWrites(warningCap, ""),
+			wantWarnings: warningCap,
+		},
+		{
+			name:         "warnings one past the cap",
+			src:          deprecatedWrites(warningCap+1, ""),
+			wantWarnings: warningCap,
+			wantMarkers:  map[source.Severity]string{source.Warning: "too many warnings"},
+		},
+		{
+			// The case the two caps exist for: each severity reaches its own
+			// limit and closes its own list, and the program is rejected for the
+			// errors rather than for how much it said.
+			name:         "both severities past their own cap",
+			src:          deprecatedWrites(warningCap+1, undeclaredReadLines(errorCap+1)),
+			wantErrors:   errorCap,
+			wantWarnings: warningCap,
+			wantMarkers: map[source.Severity]string{
+				source.Error:   "too many errors",
+				source.Warning: "too many warnings",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, diags := analyze(t, tt.src)
+			markers := capMarkers(t, diags, len(tt.wantMarkers))
+			errors := diags.Errors()
+			warnings := len(diags) - errors - len(markers)
+			if errors != tt.wantErrors || warnings != tt.wantWarnings {
+				t.Fatalf("got %d errors and %d warnings, want %d and %d:\n%s", errors, warnings, tt.wantErrors, tt.wantWarnings, diags.String())
+			}
+			if !maps.Equal(markers, tt.wantMarkers) {
+				t.Errorf("the lists are closed with %v, want %v; a marker at the wrong severity decides whether the program is emitted", markers, tt.wantMarkers)
+			}
+		})
+	}
+}
+
+// capMarkers is the message each severity closes its list with, keyed by that
+// severity, and empty where nothing overflowed.
+//
+// A marker terminates a list, so all of them sit in the last tail diagnostics
+// and one found ahead of that is reported here. The marker takes the position of
+// the first message withheld, so appending it before the list is ordered sorts
+// it to wherever that position falls — the middle, whenever the other severity
+// is still reporting past it.
+func capMarkers(t *testing.T, diags source.DiagnosticList, tail int) map[source.Severity]string {
+	t.Helper()
+	markers := make(map[source.Severity]string)
+	for i, d := range diags {
+		if !d.Overflow {
+			continue
+		}
+		markers[d.Severity] = d.Msg
+		if i < len(diags)-tail {
+			t.Errorf("the %s list is closed at index %d with %d diagnostics after it, so the report reads as ending where it did not", d.Severity, i, len(diags)-1-i)
+		}
+	}
+	return markers
+}
+
+// TestWarningVolumeDoesNotSuppressDefiniteAssignment pins the analysis that
+// warnings must never gate.
+//
+// Definite assignment runs only where checking found no error, since a name that
+// did not resolve would make every mention of it look like a read of something
+// else. A warning is not such a name, and nothing downstream reports the mistake
+// this analysis exists for: IR generation gives the read no value, the optimizer
+// folds through the undef, and the emitted program does nothing and says
+// nothing. A program is therefore checked the same whether it drew three
+// warnings or more than the cap admits.
+func TestWarningVolumeDoesNotSuppressDefiniteAssignment(t *testing.T) {
+	tests := []struct {
+		name     string
+		warnings int
+	}{
+		{name: "well inside the cap", warnings: 3},
+		{name: "past the cap", warnings: warningCap + 6},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, diags := analyze(t, deprecatedWrites(tt.warnings, "    __ic_store(d1, On, z);\n"))
+			found := false
+			for _, d := range diags {
+				if d.Severity == source.Error && strings.Contains(d.Msg, "'z' is read here without having been assigned") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("the read of an unassigned register is not reported under %d warnings:\n%s", tt.warnings, diags.String())
+			}
+		})
+	}
+}
+
+// TestConstantArrayIndexIsHeldToTheBound covers the subscript whose slot is
+// decided here and nowhere later.
+//
+// The declared length belongs to the array type, and a constant index is folded
+// out of the IR long before instruction selection has an address to check
+// against the memory array. What the chip does with the address it is handed is
+// not a diagnostic either: get answers a slot outside the array with the unknown
+// error and put with a stack overflow, once per tick for as long as the program
+// runs.
+func TestConstantArrayIndexIsHeldToTheBound(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "a write far past a global array",
+			src: `long long a[4];
+void main(void) {
+    a[/*!*/9000] = 1;
+    __ic_store(d0, Setting, a[0]);
+}
+`,
+			want: "an array index must be between 0 and 3, the last index of 'a', found 9000",
+		},
+		{
+			name: "a read one past the end",
+			src: `long long a[4];
+void main(void) {
+    __ic_store(d0, Setting, a[/*!*/4]);
+}
+`,
+			want: "an array index must be between 0 and 3, the last index of 'a', found 4",
+		},
+		{
+			name: "a negative index",
+			src: `long long a[4];
+void main(void) {
+    __ic_store(d0, Setting, a[/*!*/-1]);
+}
+`,
+			want: "an array index must be between 0 and 3, the last index of 'a', found -1",
+		},
+		{
+			name: "an index past a local array",
+			src: `void main(void) {
+    long long buf[2] = {1, 2};
+    __ic_store(d0, Setting, buf[/*!*/2]);
+}
+`,
+			want: "an array index must be between 0 and 1, the last index of 'buf', found 2",
+		},
+		{
+			name: "an index a constexpr object names",
+			src: `constexpr long long kSlot = 9000;
+long long a[4];
+void main(void) {
+    __ic_store(d0, Setting, a[/*!*/kSlot]);
+}
+`,
+			want: "an array index must be between 0 and 3, the last index of 'a', found 9000",
+		},
+		{
+			name: "an index an expression folds to",
+			src: `long long a[4];
+void main(void) {
+    __ic_store(d0, Setting, a[/*!*/2 + 2]);
+}
+`,
+			want: "an array index must be between 0 and 3, the last index of 'a', found 4",
+		},
+		{
+			name: "an index past an array of double",
+			src: `double a[3];
+void main(void) {
+    __ic_store(d0, Setting, a[/*!*/3]);
+}
+`,
+			want: "an array index must be between 0 and 2, the last index of 'a', found 3",
+		},
+		{
+			name: "a read through the address one past the end",
+			src: `long long a[4];
+void main(void) {
+    __ic_store(d0, Setting, *&a[/*!*/4]);
+}
+`,
+			want: "an array index must be between 0 and 3, the last index of 'a', found 4",
+		},
+		{
+			name: "a read through the parenthesized address one past the end",
+			src: `long long a[4];
+void main(void) {
+    __ic_store(d0, Setting, *(&a[/*!*/4]));
+}
+`,
+			want: "an array index must be between 0 and 3, the last index of 'a', found 4",
+		},
+		{
+			name: "a write through the address one past the end",
+			src: `long long a[4];
+void main(void) {
+    *&a[/*!*/4] = 7;
+    __ic_store(d0, Setting, a[0]);
+}
+`,
+			want: "an array index must be between 0 and 3, the last index of 'a', found 4",
+		},
+		{
+			name: "a compound assignment through the address one past the end",
+			src: `long long a[4];
+void main(void) {
+    *&a[/*!*/4] += 7;
+    __ic_store(d0, Setting, a[0]);
+}
+`,
+			want: "an array index must be between 0 and 3, the last index of 'a', found 4",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expectRejectedWith(t, tt.src, tt.want)
+		})
+	}
+}
+
+// TestTheOnePastTheEndCarveOutCoversTheAddressAlone holds the one index a
+// subscript takes beyond the array, and what taking it costs nowhere else.
+//
+// '&a[n]' for an n-element array is the one-past-the-end pointer C defines. It
+// compares against a walking pointer and designates no slot, which is why it
+// stands where the read 'a[n]' does not and why refusing it while admitting the
+// identical 'a + n' would split two spellings of one thing. Reading or writing
+// through it is not defined, and '*&a[n]' is that read with the address written
+// in the middle: the chip answers a get outside the array with the unknown
+// error and a put with a stack overflow, once per tick for as long as the
+// program runs.
+func TestTheOnePastTheEndCarveOutCoversTheAddressAlone(t *testing.T) {
+	rejected := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "an address two past the end",
+			src: `long long a[4];
+void main(void) {
+    long long *p = &a[/*!*/5];
+    __ic_store(d0, Setting, p == a);
+}
+`,
+			want: "an index under '&' must be between 0 and 4, one past the last index of 'a', found 5",
+		},
+		{
+			name: "an address far past the end",
+			src: `long long a[4];
+void main(void) {
+    long long *p = &a[/*!*/9000];
+    __ic_store(d0, Setting, p == a);
+}
+`,
+			want: "an index under '&' must be between 0 and 4, one past the last index of 'a', found 9000",
+		},
+		{
+			name: "an address before the array",
+			src: `long long a[4];
+void main(void) {
+    long long *p = &a[/*!*/-1];
+    __ic_store(d0, Setting, p == a);
+}
+`,
+			want: "an index under '&' must be between 0 and 4, one past the last index of 'a', found -1",
+		},
+		{
+			name: "an address one past an array of double",
+			src: `double a[3];
+void main(void) {
+    double *p = &a[/*!*/4];
+    __ic_store(d0, Setting, p == a);
+}
+`,
+			want: "an index under '&' must be between 0 and 3, one past the last index of 'a', found 4",
+		},
+	}
+	for _, tt := range rejected {
+		t.Run(tt.name, func(t *testing.T) {
+			expectRejectedWith(t, tt.src, tt.want)
+		})
+	}
+
+	accepted := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "the address one past the end",
+			src: `long long a[4];
+void main(void) {
+    long long *p = &a[4];
+    __ic_store(d0, Setting, p == a);
+}
+`,
+		},
+		{
+			name: "the address of the last element",
+			src: `long long a[4];
+void main(void) {
+    long long *p = &a[3];
+    __ic_store(d0, Setting, *p);
+}
+`,
+		},
+		{
+			name: "the index one before the end, computed",
+			src: `long long a[4];
+void main(void) {
+    long long *p = &a[4 - 1];
+    __ic_store(d0, Setting, *p);
+}
+`,
+		},
+		{
+			name: "the same address reached by pointer arithmetic",
+			src: `long long a[4];
+void main(void) {
+    long long *p = a + 4;
+    __ic_store(d0, Setting, p == a);
+}
+`,
+		},
+		{
+			// '&*E' designates E without reading it, so the address survives
+			// the '*' that stands under the outer '&'.
+			name: "the address one past the end taken back through a dereference",
+			src: `long long a[4];
+void main(void) {
+    long long *p = &*&a[4];
+    __ic_store(d0, Setting, p == a);
+}
+`,
+		},
+		{
+			name: "a read through an address inside the array",
+			src: `long long a[4];
+void main(void) {
+    __ic_store(d0, Setting, *&a[3]);
+}
+`,
+		},
+		{
+			name: "a write through an address inside the array",
+			src: `long long a[4];
+void main(void) {
+    *&a[3] = 7;
+    __ic_store(d0, Setting, a[0]);
+}
+`,
+		},
+	}
+	for _, tt := range accepted {
+		t.Run(tt.name, func(t *testing.T) {
+			expectAccepted(t, tt.src)
+		})
+	}
+}
+
+// TestSubscriptsTheBoundDoesNotDecideStandAsWritten holds the other edge of the
+// rule above, which is the whole of what makes it safe to apply.
+//
+// The bound settles one question: an index the source fixes into an array whose
+// length is in the type. An index the program computes carries no such number,
+// and a pointer object carries neither a length nor an offset — one walked past
+// the array it started in through a variable is left to run time. What the
+// expression itself steps is settled, and
+// [TestAConstantStepIsHeldToTheObjectItStartsIn] is where that lives.
+func TestSubscriptsTheBoundDoesNotDecideStandAsWritten(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "the last index the array has",
+			src: `long long a[4];
+void main(void) {
+    __ic_store(d0, Setting, a[3]);
+}
+`,
+		},
+		{
+			name: "an index the program computes",
+			src: `long long a[4];
+long long g;
+void main(void) {
+    g = 9000;
+    __ic_store(d0, Setting, a[g]);
+}
+`,
+		},
+		{
+			name: "a pointer walked past the array it started in",
+			src: `long long a[4];
+void main(void) {
+    long long *p = a;
+    __ic_store(d0, Setting, p[9000]);
+}
+`,
+		},
+		{
+			name: "the address one past the end, which C defines",
+			src: `long long a[4];
+void main(void) {
+    long long *p = a;
+    while (p != &a[4]) {
+        *p = 0;
+        p = p + 1;
+    }
+    __ic_store(d0, Setting, a[0]);
+}
+`,
+		},
+		{
+			name: "a subscript on a parameter, which carries no length",
+			src: `void fill(long long *p) {
+    p[9000] = 1;
+}
+void main(void) {
+    long long a[4];
+    fill(a);
+    __ic_store(d0, Setting, a[0]);
+}
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expectAccepted(t, tt.src)
+		})
 	}
 }

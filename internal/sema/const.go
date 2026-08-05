@@ -1,33 +1,39 @@
 package sema
 
 import (
+	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 
 	"github.com/greg2010/ic11c/internal/ast"
 	"github.com/greg2010/ic11c/internal/source"
 )
 
-// exactLimit is the largest magnitude the machine represents exactly. A
-// bitwise or shift result beyond it is corrupted by the round trip through a
-// double, which is worth saying at compile time rather than discovering at run
-// time.
+// exactLimit is the largest magnitude a long long holds on this machine: every
+// value lives in an IEEE double, which represents integers exactly up to and
+// including 2^53. It bounds a fold's result, not the arithmetic reaching it,
+// so a fold answering inside it always matches what the machine computes.
 const exactLimit = int64(1) << 53
 
-// The fix for every divergence between C's type for an operation and the
-// machine's own: the cast is what makes C compute in the width the fold does.
-// Which operand takes it is the whole difference between the two, since a shift
-// takes its type from the left operand alone.
+// bitwiseLimit is the largest magnitude an operand of a bitwise or shift
+// operator, or a shift result, may reach. The machine reduces such an operand
+// modulo 2^53 before the instruction reads it, and reads a result back out of
+// 53 bits and a sign taken from the next, so a shift reaching 2^53 answers -2^53.
+const bitwiseLimit = exactLimit - 1
+
+// widenAdvice and castLeftAdvice both tell the user to cast to long long so C
+// computes in the machine's own width; castLeftAdvice names the left operand
+// specifically because a shift takes its type from that operand alone.
 const (
 	widenAdvice    = "cast an operand to long long so that C widens the operation too"
 	castLeftAdvice = "cast the left operand to long long so that C widens the shift too"
 )
 
-// Value is a compile-time constant.
-//
-// Int carries a long long or a bool, a bool being 0 or 1; Float carries a double.
-// Type says which, and is what every reader has to consult: a long long constant
-// leaves Float zero and a double constant leaves Int zero.
+// Value is a compile-time constant. Int carries a long long or a bool (0 or
+// 1); Float carries a double. Type says which, and every reader must consult
+// it: a long long constant leaves Float zero, and a double constant leaves
+// Int zero.
 type Value struct {
 	Type  *Type
 	Int   int64
@@ -75,15 +81,9 @@ func failf(x ast.Expr, msg string) *constFail { return &constFail{pos: x.Pos(), 
 func reported(x ast.Expr) *constFail { return &constFail{pos: x.Pos()} }
 
 // constMode says which of C's two constant expressions a position requires.
-//
-// An integer constant expression computes in ints alone: a double reaches it
-// only as a floating literal that a cast converts, which is the one shape C
-// spells out. An arithmetic constant expression has no such restriction, and a
-// double is an ordinary operand there.
-//
-// The distinction is what keeps MicroC a subset of C23. Both forms fold to the
-// same number here, so a position that took the wrong one accepted a program no
-// C compiler would translate.
+// An integer constant expression computes in ints alone — a double reaches it
+// only as a floating literal a cast converts — while an arithmetic constant
+// expression takes a double as an ordinary operand.
 type constMode uint8
 
 const (
@@ -92,8 +92,13 @@ const (
 )
 
 // requireConst evaluates x where the language demands a constant expression of
-// the given form, naming the context when x is not one.
+// the given form, naming the context when x is not one. An x whose mistake
+// [checker.diagnoseFold] already reported is skipped, since the stricter mode
+// would otherwise re-fold it and report the same mistake twice.
 func (c *checker) requireConst(x ast.Expr, mode constMode, what string) (Value, bool) {
+	if _, prior := c.constEval(x, arithmeticConst); prior != nil && prior.msg == "" {
+		return Value{}, false
+	}
 	v, fail := c.constEval(x, mode)
 	if fail == nil {
 		c.prog.Consts[x] = v
@@ -106,11 +111,9 @@ func (c *checker) requireConst(x ast.Expr, mode constMode, what string) (Value, 
 }
 
 // initConstMode says which constant expression an initializer of type want,
-// declared by sym, must be.
-//
-// C reads the initializer of a constexpr object of integer type as an integer
-// constant expression. Every other constant initializer — a global's, and a
-// constexpr double's — is an arithmetic one, so a double computes there.
+// declared by sym, must be: C reads a constexpr integer object's initializer
+// as an integer constant expression, and every other constant initializer —
+// a global's or a constexpr double's — as an arithmetic one.
 func initConstMode(sym *Symbol, want *Type) constMode {
 	if sym.Constexpr && isIntegral(want) {
 		return integerConst
@@ -118,51 +121,106 @@ func initConstMode(sym *Symbol, want *Type) constMode {
 	return arithmeticConst
 }
 
-// diagnoseFold folds x for the problems constant evaluation reports itself: a
-// shift count no shift takes, a division by zero, and a result the machine
-// cannot hold.
-//
-// Those are properties of the operands rather than of the context, so they are
-// reported wherever the operands are constant. Reporting them only where the
-// language requires a constant expression left the same expression in a local
-// initializer folding to a number the program did not write, with nothing said.
-//
-// The failure constEval returns says only that x is not constant, which is a
-// problem in a required-constant context alone; those callers reach constEval
-// through requireConst, which names the context. What an expression that did
-// not fold is still held to is the shift width, which its operands' types
-// decide on their own.
+// diagnoseFold folds x for problems constant evaluation reports on its own —
+// an out-of-range shift count, division by zero, an unrepresentable result —
+// wherever the operands are constant, not only where a constant expression
+// is required, so a plain initializer's mistake is still caught.
 func (c *checker) diagnoseFold(x ast.Expr) {
 	if _, fail := c.constEval(x, arithmeticConst); fail != nil {
 		c.diagnoseRuntimeShift(x)
+		c.diagnoseUnfoldedOperands(x)
 	}
 }
 
-// diagnoseRuntimeShift refuses a shift whose count the program computes and
-// whose left operand C gives a type narrower than the machine's own.
-//
-// A shift takes the promoted left operand's type, and the width of that type is
-// what bounds the count: [checker.constShift] refuses 1 << 31 because C gives
-// the bare literal the type int. A count that is not constant cannot be bounded
-// that way, and the divergence is the same one — C computes 1 << n in 32 bits,
-// where a count of 32 or more is undefined and clang answers 1 << 40 with 256,
-// and this machine shifts a 64-bit value and answers 2^40. The left operand's
-// type is known whether or not the count is, which is what lets the same rule
-// reject 1 << n and admit (long long)1 << n.
-//
-// Widening the operation instead would compile a program that means one thing
-// here and another read as C, which is the subset claim the whole cType model
-// exists to keep.
-//
-// Every operand reaching a MicroC shift is an integer, so a left operand with
-// no C type is one analysis does not model rather than one C narrows, and it
-// restricts nothing.
+// diagnoseUnfoldedOperands applies the per-operand rules of a bitwise or shift
+// operator whose own fold did not reach every operand, because a fold only
+// runs once every operand is constant. A compound assignment always lands
+// here: its left operand is an object, never one the fold reaches.
+func (c *checker) diagnoseUnfoldedOperands(x ast.Expr) {
+	switch x := x.(type) {
+	case *ast.BinaryExpr:
+		c.diagnoseBinaryOperands(x)
+	case *ast.AssignExpr:
+		c.diagnoseCompoundOperand(x)
+	}
+}
+
+// diagnoseBinaryOperands applies the per-operand rules to a binary operator,
+// either of whose operands may be the constant one.
+func (c *checker) diagnoseBinaryOperands(x *ast.BinaryExpr) {
+	// Default is the rule: no other operator hands an operand to the machine's
+	// bitwise conversion, so none carries a bound one folded operand decides.
+	//exhaustive:ignore
+	switch x.Op {
+	case ast.BitAnd, ast.BitOr, ast.BitXor:
+		if c.diagnoseBitwiseOperand(x, x.X) {
+			return
+		}
+		c.diagnoseBitwiseOperand(x, x.Y)
+	case ast.Shl, ast.Shr:
+		if c.diagnoseBitwiseOperand(x, x.X) {
+			return
+		}
+		if count, constant := c.constOperand(x.Y); constant {
+			c.checkShiftCount(x.OpPos, cTypeOrMachine(c.cTypeOf(x.X)), count)
+		}
+	default:
+	}
+}
+
+// diagnoseCompoundOperand applies the same rules to the right operand of a
+// compound bitwise or shift assignment. The left operand is never asked: it
+// is the object being assigned, and a constexpr object is refused as an
+// assignment target, so no target ever carries a constant value.
+func (c *checker) diagnoseCompoundOperand(x *ast.AssignExpr) {
+	v, constant := c.constOperand(x.Value)
+	if !constant {
+		return
+	}
+	// Default is the rule: every other compound assignment applies an operator
+	// the machine's bitwise conversion never sees.
+	//exhaustive:ignore
+	switch x.Op {
+	case ast.ShlAssign, ast.ShrAssign:
+		c.checkShiftCount(x.OpPos, cTypeOrMachine(c.cTypeOf(x.Target)), v)
+	case ast.AndAssign, ast.OrAssign, ast.XorAssign:
+		c.checkBitwiseOperand(x.Value, x.Op.String(), v)
+	default:
+	}
+}
+
+// diagnoseBitwiseOperand holds one operand of x to [bitwiseLimit] where it is
+// constant, reporting whether it was refused.
+func (c *checker) diagnoseBitwiseOperand(x *ast.BinaryExpr, operand ast.Expr) bool {
+	v, constant := c.constOperand(operand)
+	if !constant {
+		return false
+	}
+	return c.checkBitwiseOperand(operand, x.Op.String(), v) != nil
+}
+
+// constOperand folds one operand of an operator that did not fold, answering
+// false for an operand that is not an integer constant. A double operand is
+// not asked about: type checking already refused it, so asking here would
+// name the same expression a second time for a window it never reaches.
+func (c *checker) constOperand(x ast.Expr) (int64, bool) {
+	v, fail := c.constEval(x, arithmeticConst)
+	if fail != nil || v.Type.Kind() != Int {
+		return 0, false
+	}
+	return v.Int, true
+}
+
+// diagnoseRuntimeShift refuses a shift whose count is not constant and whose
+// left operand C gives a type narrower than the machine's own: C computes
+// '1 << n' in that promoted type — 32 bits for a bare int — so a count of 32
+// or more is undefined in C, while this machine always shifts 64 bits.
 func (c *checker) diagnoseRuntimeShift(x ast.Expr) {
 	shift, binary := x.(*ast.BinaryExpr)
 	if !binary || (shift.Op != ast.Shl && shift.Op != ast.Shr) {
 		return
 	}
-	if _, fail := c.constEval(shift.Y, arithmeticConst); fail == nil {
+	if _, fail := c.constEval(shift.Y, arithmeticConst); fail == nil || fail.msg == "" {
 		return
 	}
 	t, known := c.cTypeOf(shift.X)
@@ -188,12 +246,34 @@ func (c *checker) constEval(x ast.Expr, mode constMode) (Value, *constFail) {
 	return Value{}, reported(x)
 }
 
+// foldKey names one folded node. The mode is part of it because the two
+// constant expressions admit different operands, so the same node can fold
+// under one and fail under the other.
+type foldKey struct {
+	x    ast.Expr
+	mode constMode
+}
+
+// foldResult is what one fold answered, kept so that a second ask does not
+// repeat the work beneath it.
+type foldResult struct {
+	value Value
+	fail  *constFail
+}
+
 // constFold folds one node, leaving the mode to constEval to enforce on the
-// result.
-//
-// It expects x to have been type checked, so a well-typed operand pair is all
-// it has to handle.
+// result. It expects x to already be type checked.
 func (c *checker) constFold(x ast.Expr, mode constMode) (Value, *constFail) {
+	key := foldKey{x: x, mode: mode}
+	if got, folded := c.folded[key]; folded {
+		return got.value, got.fail
+	}
+	v, fail := c.foldNode(x, mode)
+	c.folded[key] = foldResult{value: v, fail: fail}
+	return v, fail
+}
+
+func (c *checker) foldNode(x ast.Expr, mode constMode) (Value, *constFail) {
 	if t, ok := c.prog.Types[x]; ok && t.Kind() == Invalid {
 		return Value{}, reported(x)
 	}
@@ -291,10 +371,12 @@ func (c *checker) constUnary(x *ast.UnaryExpr, mode constMode) (Value, *constFai
 			// Type checking has already refused '~' over a double.
 			return Value{}, reported(x)
 		}
+		if fail := c.checkBitwiseOperand(x.X, x.Op.String(), v.Int); fail != nil {
+			return Value{}, fail
+		}
 		return c.constUnaryInt(x, ^v.Int)
 	case ast.AddrOf, ast.Deref:
-		// Answered above, before the operand was folded, so that the
-		// diagnostic names the pointer rather than whatever stands under it.
+		// Handled above, before the operand folded.
 	}
 	return Value{}, reported(x)
 }
@@ -306,11 +388,9 @@ func (c *checker) constUnaryInt(x *ast.UnaryExpr, v int64) (Value, *constFail) {
 }
 
 // cTypeOrMachine reads one of the cType lookups, answering with the machine's
-// own width where the lookup found no type.
-//
-// A type the model does not record restricts nothing: the operand folded to an
-// integer to be asked about at all, so this is a shape the model does not cover
-// rather than a width C narrows the fold to.
+// own width where the lookup found no type: an unmodeled type restricts
+// nothing, since the operand already folded to an integer to be asked about at
+// all.
 func cTypeOrMachine(t cType, known bool) cType {
 	if !known {
 		return cLongLong
@@ -370,11 +450,11 @@ func (c *checker) constBinary(x *ast.BinaryExpr, mode constMode) (Value, *constF
 	case ast.Div, ast.Mod:
 		return c.constDivide(x, t, a, b)
 	case ast.BitAnd:
-		return c.constResult(x.OpPos, operatorResult(x.Op.String()), t, a&b)
+		return c.constBitwise(x, t, a, b, a&b)
 	case ast.BitOr:
-		return c.constResult(x.OpPos, operatorResult(x.Op.String()), t, a|b)
+		return c.constBitwise(x, t, a, b, a|b)
 	case ast.BitXor:
-		return c.constResult(x.OpPos, operatorResult(x.Op.String()), t, a^b)
+		return c.constBitwise(x, t, a, b, a^b)
 	case ast.Eq:
 		return Value{Type: BoolType, Int: boolInt(a == b)}, nil
 	case ast.Ne:
@@ -394,35 +474,106 @@ func (c *checker) constBinary(x *ast.BinaryExpr, mode constMode) (Value, *constF
 	return Value{}, reported(x)
 }
 
-// convertOperands applies C's usual arithmetic conversions to a folded operand
-// pair and reports the type both convert to.
-//
-// An operand the common type does not hold is a divergence rather than a
-// rounding: C goes on computing with the number the conversion produced and a
-// 64-bit fold with the number the source wrote, so the operator answers
-// differently in each. Refusing it is what keeps the two agreeing.
-//
-// A pair with no common type is left unrestricted, which [cTypeOrMachine]
-// explains.
+// convertOperands applies C's usual arithmetic conversions to a folded
+// operand pair and reports the common type. An operand outside that type is
+// refused only where [convertedAnswerDiffers] finds the converted answer
+// actually diverges from the one the fold computed.
 func (c *checker) convertOperands(x *ast.BinaryExpr, a, b int64) (cType, *constFail) {
 	t := cTypeOrMachine(c.convertedCType(x))
+	if !convertedAnswerDiffers(x.Op, t, a, b) {
+		return t, nil
+	}
+	// The answers can only differ where the conversion changed something, so one
+	// of the two is an operand t does not hold, and that is the one to name.
+	operand, v := x.X, a
+	if t.holds(a) {
+		operand, v = x.Y, b
+	}
+	c.errorf(operand.Pos(), "C converts this operand of '%s' to '%s', where %d is a different number; %s",
+		x.Op, t, v, widenAdvice)
+	return t, &constFail{pos: operand.Pos()}
+}
+
+// convertedAnswerDiffers reports whether op answers differently over the pair
+// C converts to t than over the pair the source wrote. A type that holds both
+// operands converts neither, so the two never differ there.
+func convertedAnswerDiffers(op ast.BinaryOp, t cType, a, b int64) bool {
+	ca, cb := t.convert(a), t.convert(b)
+	switch op {
+	case ast.BitAnd:
+		return ca&cb != a&b
+	case ast.BitOr:
+		return ca|cb != a|b
+	case ast.BitXor:
+		return ca^cb != a^b
+	case ast.Div, ast.Mod:
+		// Guards against a zero divisor (reported elsewhere) and the one pair
+		// Go's division panics on at this width.
+		if b == 0 || divideUndefined(cLongLong, a, b) {
+			return false
+		}
+		if op == ast.Div {
+			return ca/cb != a/b
+		}
+		return ca%cb != a%b
+	case ast.Eq, ast.Ne, ast.Lt, ast.Le, ast.Gt, ast.Ge:
+		return compareInts(op, ca, cb) != compareInts(op, a, b)
+	case ast.Add, ast.Sub, ast.Mul, ast.Shl, ast.Shr, ast.LogicalAnd, ast.LogicalOr:
+	}
+	return false
+}
+
+// compareInts applies one of C's six relational operators, which answer over
+// two values of one type and so need no type of their own.
+func compareInts(op ast.BinaryOp, a, b int64) bool {
+	switch op {
+	case ast.Eq:
+		return a == b
+	case ast.Ne:
+		return a != b
+	case ast.Lt:
+		return a < b
+	case ast.Le:
+		return a <= b
+	case ast.Gt:
+		return a > b
+	case ast.Ge:
+		return a >= b
+	case ast.Add, ast.Sub, ast.Mul, ast.Div, ast.Mod, ast.Shl, ast.Shr,
+		ast.BitAnd, ast.BitOr, ast.BitXor, ast.LogicalAnd, ast.LogicalOr:
+	}
+	return false
+}
+
+// constBitwise folds '&', '|' or '^' over the operand pair C converted,
+// holding both operands to the window the machine's conversion carries them
+// through — an operand at 2^53 is where fold and machine part: the fold reads
+// the number the source wrote, and the instruction reads zero.
+func (c *checker) constBitwise(x *ast.BinaryExpr, t cType, a, b, folded int64) (Value, *constFail) {
 	for _, operand := range [...]struct {
 		x ast.Expr
 		v int64
 	}{{x.X, a}, {x.Y, b}} {
-		if t.holds(operand.v) {
-			continue
+		if fail := c.checkBitwiseOperand(operand.x, x.Op.String(), operand.v); fail != nil {
+			return Value{}, fail
 		}
-		c.errorf(operand.x.Pos(), "C converts this operand of '%s' to '%s', where %d is a different number; %s",
-			x.Op, t, operand.v, widenAdvice)
-		return t, &constFail{pos: operand.x.Pos()}
 	}
-	return t, nil
+	return c.constResult(x.OpPos, operatorResult(x.Op.String()), t, folded)
 }
 
-// constResult checks a folded integer against both limits it has to meet: the C
-// type the operation computes in, and the 53 bits the machine represents
-// exactly.
+// checkBitwiseOperand refuses an operand the machine's conversion does not hand
+// to a bitwise or shift instruction unchanged.
+func (c *checker) checkBitwiseOperand(x ast.Expr, op string, v int64) *constFail {
+	if v >= -bitwiseLimit && v <= bitwiseLimit {
+		return nil
+	}
+	c.errorf(x.Pos(), "the machine reduces an operand of '%s' modulo 2^53 before the instruction reads it, so %d does not reach it; "+
+		"an operand of a bitwise or shift operator must be between %d and %d", op, v, -bitwiseLimit, bitwiseLimit)
+	return &constFail{pos: x.Pos()}
+}
+
+// constResult checks a folded integer against both limits it has to meet: the
+// C type the operation computes in, and the range [exactLimit] names.
 func (c *checker) constResult(pos source.Position, what string, t cType, v int64) (Value, *constFail) {
 	if !t.holds(v) {
 		c.errorf(pos, "%s is %d, which does not fit '%s', the type C computes it in; %s", what, v, t, widenAdvice)
@@ -431,12 +582,10 @@ func (c *checker) constResult(pos source.Position, what string, t cType, v int64
 	return c.checkWidth(pos, what, v)
 }
 
-// constDouble folds an operator with a double operand.
-//
-// Go's arithmetic on float64 is IEEE, which is what every register holds, so
-// each of these folds to the number the chip would have computed. Division by
-// zero is not refused the way the integer form is: it answers with an infinity
-// there too, and that is a value the machine holds and the emitter spells.
+// constDouble folds an operator with a double operand. Go's float64 arithmetic
+// is IEEE, matching every register on the chip, so each fold matches what the
+// chip computes at run time — including division by zero, which the machine
+// answers with an infinity or a NaN rather than refusing.
 func (c *checker) constDouble(x *ast.BinaryExpr, a, b float64) (Value, *constFail) {
 	switch x.Op {
 	case ast.Add:
@@ -468,13 +617,10 @@ func (c *checker) constDouble(x *ast.BinaryExpr, a, b float64) (Value, *constFai
 	return Value{}, reported(x)
 }
 
-// constArith reports the value of a long long fold of '+', '-', or '*', or that the
-// operation left the range the machine holds.
-//
-// Go's int64 wraps where the machine grows toward infinity, so folding a wrapped
-// result would stamp a number into the program that the same expression does not
-// compute at run time. Overflow is undefined either way; only one of the two is
-// silent.
+// constArith reports the value of a long long fold of '+', '-', or '*', or
+// that the operation left the range the machine holds. Go's int64 wraps on
+// overflow where the machine's double grows toward infinity, so folding a
+// wrapped result would stamp in a number the same expression never computes.
 func (c *checker) constArith(x *ast.BinaryExpr, t cType, a, b int64, fold func(a, b int64) (int64, bool)) (Value, *constFail) {
 	what := operatorResult(x.Op.String())
 	v, exact := fold(a, b)
@@ -485,8 +631,9 @@ func (c *checker) constArith(x *ast.BinaryExpr, t cType, a, b int64, fold func(a
 }
 
 // addInt, subInt, and mulInt apply one operator, reporting false where it
-// overflows the int64 the fold runs in rather than answering with the wrapped
-// result.
+// overflows the int64 the fold runs in, rather than answering with the wrapped
+// result. Only mulInt can actually overflow here — every operand is inside
+// 2^53, so a sum or difference stays well inside int64 — but all three check.
 func addInt(a, b int64) (int64, bool) {
 	v := a + b
 	return v, (v > a) == (b > 0)
@@ -502,14 +649,25 @@ func mulInt(a, b int64) (int64, bool) {
 	case a == 0 || b == 0:
 		return 0, true
 	case a == math.MinInt64 || b == math.MinInt64:
-		// Past the range the machine holds whatever the other operand is, and
-		// the one pair the overflow check below would panic dividing.
+		// Unreachable with a real operand (all are inside 2^53), but needed:
+		// the overflow check below divides, and MinInt64 / -1 panics in Go.
 		return 0, false
 	}
 	v := a * b
 	return v, v/b == a
 }
 
+// divideUndefined reports whether C leaves 'a / b' and 'a % b' undefined over
+// an operand pair of type t: a signed t has exactly one such pair, its most
+// negative value over -1, whose quotient overflows t by one; an unsigned t has
+// none. The same pair is what Go's own division panics on at int64's width.
+func divideUndefined(t cType, a, b int64) bool {
+	return b == -1 && a == t.min()
+}
+
+// constDivide folds '/' or '%' over the operand pair C converted to t. The
+// pair C leaves undefined is refused before folding, so every pair that
+// reaches [checker.constResult] already divides into a value t holds.
 func (c *checker) constDivide(x *ast.BinaryExpr, t cType, a, b int64) (Value, *constFail) {
 	if b == 0 {
 		what := "division"
@@ -519,11 +677,11 @@ func (c *checker) constDivide(x *ast.BinaryExpr, t cType, a, b int64) (Value, *c
 		c.errorf(x.OpPos, "%s by zero in a constant expression", what)
 		return Value{}, reported(x)
 	}
-	// The one operand pair Go's division panics on. The spec makes signed
-	// overflow undefined, so there is no answer worth folding.
-	if a == math.MinInt64 && b == -1 {
-		c.errorf(x.OpPos, "the result of '%s' is not representable on this machine", x.Op)
-		return Value{}, reported(x)
+	ca, cb := t.convert(a), t.convert(b)
+	if divideUndefined(t, ca, cb) {
+		c.errorf(x.OpPos, "C leaves '%s' undefined where the quotient does not fit '%s', the type C computes it in, "+
+			"and %d over -1 is the one such pair; %s", x.Op, t, ca, widenAdvice)
+		return Value{}, &constFail{pos: x.OpPos}
 	}
 	v := a / b
 	if x.Op == ast.Mod {
@@ -532,17 +690,18 @@ func (c *checker) constDivide(x *ast.BinaryExpr, t cType, a, b int64) (Value, *c
 	return c.constResult(x.OpPos, operatorResult(x.Op.String()), t, v)
 }
 
-// constShift folds '<<' or '>>', which convert their operands separately: the
-// result takes the promoted left operand's type, and the width of that type is
-// what bounds the count. That is why (long long)1 << 40 shifts and 1 << 40 does
-// not — C gives the bare literal the type int, whose width is 32.
+// constShift folds '<<' or '>>'. The result takes the promoted left operand's
+// type, whose width bounds the count. The count needs no [bitwiseLimit] test
+// of its own — [checker.checkShiftCount] already keeps it inside 64 — but the
+// shifted value and a left shift's result both do.
 func (c *checker) constShift(x *ast.BinaryExpr, a, b int64) (Value, *constFail) {
 	t := cTypeOrMachine(c.cTypeOf(x.X))
 	what := operatorResult(x.Op.String())
-	if b < 0 || b >= int64(t.bits) {
-		c.errorf(x.OpPos, "a shift count must be between 0 and %d, the width of '%s' that C gives the left operand, found %d",
-			t.bits-1, t, b)
+	if !c.checkShiftCount(x.OpPos, t, b) {
 		return Value{}, reported(x)
+	}
+	if fail := c.checkBitwiseOperand(x.X, x.Op.String(), a); fail != nil {
+		return Value{}, fail
 	}
 	if x.Op == ast.Shr {
 		return c.constResult(x.OpPos, what, t, a>>uint(b))
@@ -551,21 +710,38 @@ func (c *checker) constShift(x *ast.BinaryExpr, a, b int64) (Value, *constFail) 
 		c.errorf(x.OpPos, "C leaves the left shift of a negative value undefined, and the left operand is %d", a)
 		return Value{}, reported(x)
 	}
-	if b > 0 && a > math.MaxInt64>>uint(b) {
-		return c.unrepresentable(x.OpPos, what)
+	if b > 0 && a > bitwiseLimit>>uint(b) {
+		// The operand stops at 2^53 and the count at 63, so the result reaches
+		// 2^116 and naming it needs a wider arithmetic than the fold runs in.
+		shifted := new(big.Int).Lsh(big.NewInt(a), uint(b))
+		c.errorf(x.OpPos, "%s is %s, which is past %d, and the machine reads a shift result back out of 53 bits "+
+			"and a sign taken from the next, so a left shift that reaches 2^53 answers with -2^53", what, shifted, bitwiseLimit)
+		return Value{}, &constFail{pos: x.OpPos}
 	}
 	return c.constResult(x.OpPos, what, t, a<<uint(b))
 }
 
-// checkWidth rejects a long long constant the machine cannot hold, naming it as what
-// reads best where it came from. Every register and memory slot holds one
-// double, and every operation on ints converts to a signed 64-bit integer,
-// operates, and converts back, so anything past 53 significant bits comes back
-// changed.
-//
-// It is what makes the integer type a subset of the C type the prelude declares
-// it as rather than an approximation of it: long long is at least 64 bits
-// everywhere, so a constant this admits denotes the same number there.
+// checkShiftCount holds a constant count to the width of t, the type C gives
+// the left operand, and reports whether it stands — the whole reason
+// '(long long)1 << 40' shifts and '1 << 40' does not. A narrow t is one
+// MicroC cannot spell directly, which is why the message advises a cast.
+func (c *checker) checkShiftCount(pos source.Position, t cType, count int64) bool {
+	if count >= 0 && count < int64(t.bits) {
+		return true
+	}
+	msg := fmt.Sprintf("a shift count must be between 0 and %d, the width of '%s' that C gives the left operand, found %d",
+		t.bits-1, t, count)
+	if t.bits < machineBits {
+		msg += "; " + castLeftAdvice
+	}
+	c.errorf(pos, "%s", msg)
+	return false
+}
+
+// checkWidth rejects a long long constant outside the range the machine
+// holds. The bound is on magnitude, not round-trip: a power of two past 2^53
+// survives a double untouched but is rejected anyway, since arithmetic near it
+// is no longer exact.
 func (c *checker) checkWidth(pos source.Position, what string, v int64) (Value, *constFail) {
 	if v > exactLimit || v < -exactLimit {
 		return c.unrepresentable(pos, what)
@@ -573,8 +749,12 @@ func (c *checker) checkWidth(pos source.Position, what string, v int64) (Value, 
 	return Value{Type: IntType, Int: v}, nil
 }
 
+// unrepresentable reports a value outside [exactLimit].
+//
+// It is also what an overflowed int64 fold reports, which is past the window by
+// a wide margin, so the range the message names describes both.
 func (c *checker) unrepresentable(pos source.Position, what string) (Value, *constFail) {
-	c.errorf(pos, "%s needs more than 53 significant bits and is not representable on this machine", what)
+	c.errorf(pos, "%s is outside -2^53 to 2^53, the range a long long holds on this machine, where every value lives in an IEEE double", what)
 	return Value{}, &constFail{pos: pos}
 }
 
@@ -582,12 +762,9 @@ func (c *checker) unrepresentable(pos source.Position, what string) (Value, *con
 func operatorResult(op string) string { return "the result of '" + op + "'" }
 
 // constCond folds a conditional expression, evaluating only the arm the
-// condition selects. The truth of the condition is read through Num rather than
-// off Int, which carries nothing for a double.
-//
-// The arm not taken still has a say. C converts both arms to one type, so an
-// unsigned arm the fold never evaluates is what decides whether a negative
-// value in the other arm survives.
+// condition selects (through Num, since Int carries nothing for a double).
+// The untaken arm still has a say: C converts both arms to one type, so its
+// unsigned-ness can decide whether a negative value in the taken arm survives.
 func (c *checker) constCond(x *ast.CondExpr, mode constMode) (Value, *constFail) {
 	cond, fail := c.constEval(x.Cond, mode)
 	if fail != nil {
@@ -608,14 +785,10 @@ func (c *checker) constCond(x *ast.CondExpr, mode constMode) (Value, *constFail)
 	return c.constResult(x.Question, operatorResult("?:"), t, v.Int)
 }
 
-// constCast folds a cast. A cast to long long truncates toward zero, which is the
-// machine's trunc and not its round; a cast to bool normalizes; a cast to
-// double widens, exactly to 2^53.
-//
-// A floating literal written directly under the cast is the one double an
-// integer constant expression admits, so the operand of that shape alone folds
-// as an arithmetic constant expression. Anything else keeps the caller's mode
-// and is held to it.
+// constCast folds a cast. A cast to long long truncates toward zero — the
+// machine's trunc, not its round; a cast to bool normalizes; a cast to double
+// widens exactly, up to 2^53. A floating literal written directly under the
+// cast is the one double an integer constant expression admits.
 func (c *checker) constCast(x *ast.CastExpr, mode constMode) (Value, *constFail) {
 	operand := mode
 	if _, literal := x.X.(*ast.FloatLit); literal {
@@ -637,13 +810,10 @@ func (c *checker) constCast(x *ast.CastExpr, mode constMode) (Value, *constFail)
 	return Value{}, reported(x)
 }
 
-// constTruncate folds a cast of a double to a long long.
-//
-// A whole part no int64 holds is refused outright, a NaN and an infinity among
-// them: the machine's trunc answers with them unchanged, and there is no integer
-// constant to fold them to. One that fits an int64 is still held to the 53 bits
-// the machine represents exactly, which is what every other integer constant is
-// held to.
+// constTruncate folds a cast of a double to a long long. A whole part no
+// int64 holds — including NaN and an infinity, which the machine's trunc
+// answers with unchanged — is refused outright. One that fits is still held
+// to the 53 bits the machine represents exactly, like every integer constant.
 func (c *checker) constTruncate(x *ast.CastExpr, v Value) (Value, *constFail) {
 	if v.Type.Kind() != Double {
 		return Value{Type: IntType, Int: v.Int}, nil
