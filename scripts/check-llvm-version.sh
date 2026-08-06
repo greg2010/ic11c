@@ -35,6 +35,7 @@ unscanned=(
 	.llvm-version
 	README.md
 	cmd
+	docs
 	go.mod
 	go.sum
 	internal
