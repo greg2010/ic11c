@@ -9,7 +9,7 @@ ARG STEAM_MANIFEST=2546537964923579038
 # host but Docker. Pinned by digest because a rebuilt tag is different bytes
 # under a version string saying it is not, and this one goes into a published
 # binary. Its own stage so the release targets can refresh the apt layer below.
-FROM --platform=linux/amd64 golang:1.26-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651 AS linux-toolchain
+FROM --platform=linux/amd64 golang:1.27-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b AS linux-toolchain
 
 ARG LLVM_VERSION
 ENV LLVM_VERSION=${LLVM_VERSION}
@@ -68,7 +68,7 @@ COPY --from=build-linux /out/ic11c_Linux_x86_64.tar.gz /
 # MSVC-ABI LLVM releases, so the LLVM here is MSYS2's UCRT64 build. Trixie, not
 # bookworm: the g++-mingw-w64-ucrt64 cross compiler that targets the UCRT rather
 # than msvcrt is not in bookworm.
-FROM --platform=linux/amd64 golang:1.26-trixie@sha256:4ee9ffa999b4583ce281939cdff828763083610292f252279a0cee77473bd9a7 AS windows-toolchain
+FROM --platform=linux/amd64 golang:1.27-trixie@sha256:9baa6b4187bbb98d240372a8a235ac0bb6b5ddd52bba1431dc2f7c0705862728 AS windows-toolchain
 
 ARG LLVM_VERSION
 ENV LLVM_VERSION=${LLVM_VERSION}
@@ -263,7 +263,7 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
 # Every image the extraction runs on is pinned by digest, this one included: it
 # runs the extractor, the extractor writes the checked-in JSON, and a rebuilt tag
 # would move that JSON under a manifest saying the game did not.
-FROM --platform=linux/amd64 golang:1.26-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651 AS isa-extract
+FROM --platform=linux/amd64 golang:1.27-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b AS isa-extract
 
 COPY --from=isa-decompile /decompiled /decompiled
 COPY --from=isa-decompile /assembly.dll /manifest /
@@ -301,7 +301,7 @@ COPY --from=isa-extract /out/ /
 # are transliterated from. A sibling of isa-extract rather than a stage on top of
 # it: extraction stops on a game build that changed a table it asserts, which is
 # exactly the build whose C# a reviewer needs to see, so the two fail separately.
-FROM --platform=linux/amd64 golang:1.26-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651 AS isa-digest
+FROM --platform=linux/amd64 golang:1.27-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b AS isa-digest
 
 COPY --from=isa-decompile /decompiled /decompiled
 COPY --from=isa-decompile /assembly.dll /manifest /
