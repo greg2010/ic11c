@@ -9,7 +9,7 @@ ARG STEAM_MANIFEST=2546537964923579038
 # host but Docker. Pinned by digest because a rebuilt tag is different bytes
 # under a version string saying it is not, and this one goes into a published
 # binary. Its own stage so the release targets can refresh the apt layer below.
-FROM --platform=linux/amd64 golang:1.26-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651 AS linux-toolchain
+FROM --platform=linux/amd64 golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS linux-toolchain
 
 ARG LLVM_VERSION
 ENV LLVM_VERSION=${LLVM_VERSION}
@@ -263,7 +263,7 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
 # Every image the extraction runs on is pinned by digest, this one included: it
 # runs the extractor, the extractor writes the checked-in JSON, and a rebuilt tag
 # would move that JSON under a manifest saying the game did not.
-FROM --platform=linux/amd64 golang:1.26-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651 AS isa-extract
+FROM --platform=linux/amd64 golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS isa-extract
 
 COPY --from=isa-decompile /decompiled /decompiled
 COPY --from=isa-decompile /assembly.dll /manifest /
@@ -301,7 +301,7 @@ COPY --from=isa-extract /out/ /
 # are transliterated from. A sibling of isa-extract rather than a stage on top of
 # it: extraction stops on a game build that changed a table it asserts, which is
 # exactly the build whose C# a reviewer needs to see, so the two fail separately.
-FROM --platform=linux/amd64 golang:1.26-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651 AS isa-digest
+FROM --platform=linux/amd64 golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS isa-digest
 
 COPY --from=isa-decompile /decompiled /decompiled
 COPY --from=isa-decompile /assembly.dll /manifest /
