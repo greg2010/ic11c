@@ -82,13 +82,13 @@ jobs:
 
       # if-no-files-found defaults to warn, so without it an upload whose path
       # matched nothing succeeds and the release publishes without this platform.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-linux
           path: ic11c_Linux_x86_64.tar.gz
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: corpus-linux
           path: corpus-linux.txt
@@ -129,13 +129,13 @@ jobs:
       - name: Package
         run: tar czf "ic11c_Darwin_arm64.tar.gz" ic11c
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-macos
           path: ic11c_Darwin_arm64.tar.gz
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: corpus-macos
           path: corpus-macos.txt
@@ -168,7 +168,7 @@ jobs:
           --build-arg VERSION="${VERSION}"
           --output type=local,dest=dist .
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-windows
           path: dist/ic11c_Windows_x86_64.zip
@@ -211,7 +211,7 @@ jobs:
           CORPUS_MANIFEST: corpus-windows.txt
         run: bash scripts/verify-release-compiles.sh unpacked/ic11c.exe
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: corpus-windows
           path: corpus-windows.txt
