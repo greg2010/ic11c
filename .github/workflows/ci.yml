@@ -196,7 +196,7 @@ jobs:
           scripts/verify-release-linux.sh ic11c
 
       # What the other two platforms are compared against.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-corpus-linux
           path: corpus-linux.txt
@@ -227,7 +227,7 @@ jobs:
           --build-arg VERSION="${VERSION}"
           --output type=local,dest=dist .
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-dist-windows
           path: dist/ic11c_Windows_x86_64.zip
@@ -268,7 +268,7 @@ jobs:
           CORPUS_MANIFEST: corpus-windows.txt
         run: bash scripts/verify-release-compiles.sh unpacked/ic11c.exe
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-corpus-windows
           path: corpus-windows.txt
@@ -300,7 +300,7 @@ jobs:
           scripts/build-release-macos.sh ic11c
           scripts/verify-release-macos.sh ic11c
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-corpus-macos
           path: corpus-macos.txt
