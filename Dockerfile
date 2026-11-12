@@ -161,7 +161,7 @@ COPY --from=build-windows /out/ic11c_Windows_x86_64.zip /
 # dedicated server rather than the client: app 600760 carries Valve's
 # free-to-download flag, so an anonymous login reaches it and no account or
 # licence is involved, and it ships the same definitions the client does.
-FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/sdk:10.0@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0 AS isa-tools
+FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/sdk:11.0@sha256:65f3c7c6a25a239ab3e6719f2896147e7b68242ff2d8818dd70498bde6ef8bea AS isa-tools
 
 ARG DEPOTDOWNLOADER_VERSION=3.4.0
 ARG DEPOTDOWNLOADER_SHA256=7419f65efb7eb16b6e56987ed1b76475f29c02475c0016166c84798388e796bc
